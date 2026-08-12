@@ -101,7 +101,9 @@ def audit(action, status, detail=''):
 def worker_certificate(node_id):
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?', node_id or ''):
         raise ValueError('Invalid node ID')
-    cert_name = f'emby-worker-{node_id}'
+    # One cluster-wide wildcard certificate covers every first-level route
+    # hostname. The master renews it once and Workers pull encrypted updates.
+    cert_name = 'emby-edge-wildcard'
     cert_dir = f'/etc/letsencrypt/live/{cert_name}'
     cert_file = os.path.join(cert_dir, 'fullchain.pem')
     key_file = os.path.join(cert_dir, 'privkey.pem')
@@ -113,7 +115,7 @@ def worker_certificate(node_id):
                 '--dns-cloudflare-propagation-seconds', '30', '--non-interactive',
                 '--agree-tos', '--register-unsafely-without-email',
                 '--cert-name', cert_name,
-                '-d', f'*.{BASE_DOMAIN}', '-d', f'{node_id}.{BASE_DOMAIN}',
+                '-d', f'*.{BASE_DOMAIN}', '-d', BASE_DOMAIN,
             ]
             result = subprocess.run(command, capture_output=True, text=True, timeout=180)
             if result.returncode != 0:
