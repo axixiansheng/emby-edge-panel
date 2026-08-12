@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>阿昔反代 | Emby Edge Network</title>
+    <style>
+        :root { 
+            --primary: #2563eb; 
+            --primary-hover: #1d4ed8;
+            --danger: #ef4444; 
+            --success: #10b981; 
+            --text: #1e293b; 
+            --text-light: #64748b;
+            --glass-bg: rgba(255, 255, 255, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.5);
+            --glass-shadow: 0 8px 32px rgba(31, 38, 135, 0.07);
+        }
+        
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            background: linear-gradient(135deg, #e0eafc 0%, #cfdef3 100%);
+            background-attachment: fixed;
+            color: var(--text); 
+            margin: 0; 
+            padding: 20px; 
+            line-height: 1.6; 
+            font-size: 14px;
+            min-height: 100vh;
+        }
+
+        .container { max-width: 1100px; margin: 0 auto; padding-bottom: 40px;}
+
+        /* 毛玻璃卡片通用样式 */
+        .card { 
+            background: var(--glass-bg); 
+            backdrop-filter: blur(16px); 
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border); 
+            border-radius: 16px; 
+            padding: 24px; 
+            margin-bottom: 24px; 
+            box-shadow: var(--glass-shadow);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        h1, h2, h3 { margin: 0 0 16px; font-weight: 600; letter-spacing: -0.02em; color: #0f172a;}
+        h1 { font-size: 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;}
+        h2 { font-size: 22px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,0,0,0.05); }
+        h3 { font-size: 16px; color: var(--text-light); display: flex; justify-content: space-between; align-items: center;}
+
+        /* 表单控件优化 */
+        input, select { 
+            width: 100%; 
+            padding: 12px 16px; 
+            margin-bottom: 16px; 
+            border: 1px solid rgba(255,255,255,0.8); 
+            border-radius: 12px; 
+            outline: none; 
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+            font-family: inherit; 
+            font-size: 14px; 
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+        }
+        input:focus, select:focus { 
+            border-color: var(--primary); 
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15); 
+            background: #fff;
+        }
+
+        /* 按钮动效优化 */
+        button { 
+            background: var(--primary); 
+            color: #fff; 
+            border: none; 
+            padding: 12px 20px; 
+            border-radius: 12px; 
+            font-weight: 500; 
+            cursor: pointer; 
+            transition: all 0.2s; 
+            font-size: 14px; 
+            display: inline-flex; 
+            align-items: center; 
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+            white-space: nowrap;
+        }
+        button:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);}
+        button:active { transform: translateY(1px); }
+        button.outline { background: rgba(255,255,255,0.5); color: var(--text); border: 1px solid rgba(0,0,0,0.1); box-shadow: none;}
+        button.outline:hover { background: rgba(255,255,255,0.9); border-color: rgba(0,0,0,0.2);}
+        button.danger { background: var(--danger); box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);}
+        button.danger:hover { background: #dc2626; }
+
+        /* 表格丝滑适配 */
+        .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; }
+        table { width: 100%; border-collapse: collapse; min-width: 600px; text-align: left; }
+        th, td { padding: 14px 16px; border-bottom: 1px solid rgba(0,0,0,0.05); font-variant-numeric: tabular-nums; }
+        th { color: var(--text-light); font-weight: 500; font-size: 13px; white-space: nowrap;}
+        tr:hover { background: rgba(255,255,255,0.4); transition: background 0.2s;}
+
+        /* --- 修改开始：优化 badge 样式，修复多行截断并美化圆角 --- */
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; background: rgba(0,0,0,0.05); color: var(--text-light); word-break: break-all; line-height: 1.4; text-align: center; }
+        .badge.online { background: rgba(16, 185, 129, 0.1); color: var(--success); }
+        .badge.offline { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
+        /* --- 修改结束 --- */
+
+        /* 布局栅格化与响应式 */
+        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;}
+        .flex-row { display: flex; gap: 16px; align-items: flex-start; }
+        .flex-row > * { flex: 1; min-width: 0; }
+        
+        .input-group { display: flex; gap: 12px; align-items: stretch; margin-top: 16px; }
+        
+        .node-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 8px; }
+        .node-card { 
+            background: rgba(255,255,255,0.4); border: 2px solid transparent; 
+            border-radius: 14px; padding: 16px 12px; cursor: pointer; transition: all 0.3s; 
+            position: relative; overflow: hidden; display: flex; flex-direction: column; 
+            align-items: center; justify-content: center; text-align: center; min-height: 90px;
+        }
+        .node-card:hover { background: rgba(255,255,255,0.8); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.05);}
+        .node-card.active { border-color: var(--primary); background: #fff; box-shadow: 0 4px 16px rgba(37,99,235,0.1); }
+        .node-card.offline { opacity: 0.5; filter: grayscale(1); cursor: not-allowed; pointer-events: none;}
+        .node-name { font-weight: 600; font-size: 15px; margin-bottom: 6px; color: #0f172a; word-break: break-all; line-height: 1.4; }
+        
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; box-shadow: 0 0 8px currentColor;}
+        .dot-green { background: var(--success); color: var(--success);} 
+        .dot-red { background: var(--danger); color: var(--danger);}
+
+        /* 登录页宣传与布局 */
+        .landing-wrap { display: flex; gap: 40px; align-items: center; margin-top: 40px;}
+        .landing-info { flex: 1.2; }
+        .landing-info h1 { font-size: 36px; background: linear-gradient(90deg, #1e293b, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px;}
+        .landing-info .slogan { font-size: 18px; color: var(--text-light); margin-bottom: 32px;}
+        .feature-item { margin-bottom: 24px; padding: 20px; background: rgba(255,255,255,0.4); border-radius: 16px; border: 1px solid rgba(255,255,255,0.6);}
+        .feature-item h4 { margin: 0 0 8px; font-size: 16px; color: #0f172a; display: flex; align-items: center; gap: 8px;}
+        .feature-item p { margin: 0; font-size: 13px; color: var(--text-light);}
+        
+        .login-box { flex: 0.8; max-width: 400px; width: 100%;}
+        .toggle-text { font-size: 13px; color: var(--primary); cursor: pointer; margin-bottom: 16px; display: inline-block; transition: opacity 0.2s;}
+        .toggle-text:hover { opacity: 0.8; text-decoration: underline;}
+
+        /* 公告与一键复制 */
+        .announcement-bar { background: rgba(255,255,255,0.6); border-left: 4px solid var(--primary); border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; display: flex; align-items: center; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.02);}
+        .scroll-box { overflow: hidden; white-space: nowrap; width: 100%; position: relative;}
+        .scroll-text { display: inline-block; animation: scroll-left 15s linear infinite; font-size: 14px; color: var(--text);}
+        @keyframes scroll-left { 0% { transform: translateX(100%); } 100% { transform: translateX(-100%); } }
+        
+        .copyable { cursor: pointer; color: var(--primary); transition: opacity 0.2s; font-family: monospace; display: inline-flex; align-items: center; gap: 6px;}
+        .copyable:hover { opacity: 0.7; text-decoration: underline;}
+        .copyable:active { opacity: 0.4;}
+
+        /* Modal & Toast 毛玻璃优化 */
+        #toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(8px); color: white; padding: 14px 28px; border-radius: 30px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); opacity: 0; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); z-index: 1000; font-size: 14px; white-space: nowrap;}
+        #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+        
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.3s; z-index: 999; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);}
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        .modal { background: rgba(255,255,255,0.95); width: 100%; max-width: 420px; padding: 30px; border-radius: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.1); transform: scale(0.95) translateY(20px); transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); border: 1px solid rgba(255,255,255,0.6); position: relative;}
+        .modal-overlay.active .modal { transform: scale(1) translateY(0); }
+        .close-btn { position: absolute; top: 20px; right: 20px; cursor: pointer; color: var(--text-light); font-size: 24px; line-height: 1; transition: color 0.2s;}
+        .close-btn:hover { color: var(--danger); }
+
+        [id^="view-"] { display: none; animation: fadeIn 0.4s ease forwards;}
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* 移动端深度自适应重写 */
+        @media (max-width: 860px) {
+            .landing-wrap { flex-direction: column; margin-top: 10px;}
+            .login-box { max-width: 100%; margin-top: -20px;}
+            .flex-row { flex-direction: column; gap: 24px !important;}
+            .flex-row > * { width: 100%; flex: none !important; }
+            .input-group { flex-direction: column; gap: 0;}
+            .input-group button { margin-bottom: 16px; width: 100%;}
+            body { padding: 15px; }
+            .card { padding: 20px; }
+            .header-bar { margin-bottom: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="toast"></div>
+
+    <div class="container">
+        <!-- 视图：登陆与宣传页 -->
+        <div id="view-login" class="landing-wrap">
+            <div class="landing-info">
+                <h1>阿昔反代 <span class="badge" style="background:var(--primary); color:#fff;">Edge</span></h1>
+                <div class="slogan">专为流媒体打造的现代化边缘分发网络平台</div>
+                
+                <div class="feature-item">
+                    <h4>✨ 用户侧：一次配置，无感切换</h4>
+                    <p>客户端仅需填写一次入口域名。直接在面板一键切换优质承载节点，秒级热重载生效，告别反复修改播放器配置的烦恼。</p>
+                </div>
+                <div class="feature-item">
+                    <h4>🛡️ 腐竹侧：隐匿源站，极致安全</h4>
+                    <p>彻底阻断真实源站 IP 泄露，源机器隐藏在分布式节点之后。采用安全密钥签名通信，严防高防被穿透与恶意探测。</p>
+                </div>
+                <div class="feature-item">
+                    <h4>⚡ 技术栈：轻量极简，性能压榨</h4>
+                    <p>纯前端玻璃拟物态计算渲染，服务端零 UI 开销。配合轻量探针心跳与 Nginx 流量分发，NAT 小鸡也能轻松跑满千兆带宽。</p>
+                </div>
+            </div>
+
+            <div class="login-box card">
+                <h2 style="text-align:center; margin-bottom: 24px; border:none; color:var(--primary);">控制台登入</h2>
+                <input type="text" id="l-user" placeholder="用户名 (Username)">
+                <input type="password" id="l-pwd" placeholder="密码 (Password)">
+                
+                <div style="text-align: right;">
+                    <span class="toggle-text" onclick="document.getElementById('l-code-wrap').style.display='block'; this.style.display='none';">🔑 首次激活账户? 点击展开</span>
+                </div>
+                
+                <div id="l-code-wrap" style="display:none;">
+                    <input type="text" id="l-code" placeholder="输入邀请授权码 (仅激活时需填写)">
+                </div>
+                
+                <button onclick="login()" style="width:100%; margin-top: 8px; font-size: 16px; padding: 14px;">进入网络</button>
+            </div>
+        </div>
+
+        <!-- 视图：用户工作台 -->
+        <div id="view-user">
+            <div class="header-bar">
+                <h1>阿昔反代 <span class="badge" style="font-weight:normal;">用户: <span id="u-name"></span></span></h1>
+                <div style="display:flex; align-items:center; gap: 12px; margin-left: auto;">
+                    <span class="badge" style="font-size:14px; background:#fff; border: 1px solid rgba(0,0,0,0.1);">线路: <span id="u-count"></span>/<span id="u-limit">3</span></span>
+                    <button class="outline" onclick="logout()">退出</button>
+                </div>
+            </div>
+            
+            <!-- 滚动公告栏 -->
+            <div id="u-ann-bar" class="announcement-bar" style="display: none;">
+                <span style="margin-right: 12px; font-weight: bold; color: var(--primary); white-space: nowrap;">📢 公告</span>
+                <div class="scroll-box"><div class="scroll-text" id="u-ann-scroll"></div></div>
+            </div>
+            
+            <div class="card">
+                <h3>选择承载节点</h3>
+                <div id="u-nodes" class="node-grid"></div>
+                <div class="input-group">
+                    <input type="text" id="u-sub" placeholder="设置子域名 (例如: play1)">
+                    <input type="text" id="u-target" placeholder="目标源站 (支持 http/https/IP)">
+                    <button onclick="addRoute()">一键部署</button>
+                </div>
+                <p style="margin:0; font-size: 12px; color:var(--text-light);">部署后，生成的线路地址支持点击一键复制到剪贴板。</p>
+            </div>
+
+            <div class="card" style="padding-bottom: 8px;">
+                <h3>线路矩阵</h3>
+                <div class="table-responsive">
+                    <table>
+                        <thead><tr><th>承载节点</th><th>客户端公网入口</th><th>直通源站目标</th><th>操作管理</th></tr></thead>
+                        <tbody id="u-routes"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 视图：上帝视角（主控） -->
+        <div id="view-admin">
+            <div class="header-bar">
+                <h1>阿昔系统引擎 <span class="badge" style="background:#1e293b; color:#fff;">Master Mode</span></h1>
+                <button class="outline" style="margin-left: auto;" onclick="logout()">退出</button>
+            </div>
+            
+            <div class="card">
+                <h3>📢 系统公告下发</h3>
+                <div class="input-group" style="margin-top: 8px;">
+                    <input type="text" id="a-ann-input" placeholder="输入你要推送给所有用户的滚动公告，留空则代表撤销显示">
+                    <button onclick="updateAnnouncement()">发布/更新公告</button>
+                </div>
+            </div>
+
+            <div class="flex-row" style="gap: 24px;">
+                <div class="card" style="flex: 1.5;">
+                    <h3>节点扩容 (Worker Agent)</h3>
+                    <div class="input-group" style="margin-top: 8px;">
+                        <input type="text" id="n-name" placeholder="标识名称 (例: 香港BGP)">
+                        <input type="text" id="n-host" placeholder="节点通信 IP / 域名">
+                    </div>
+                    <div class="input-group" style="margin-top:0;">
+                        <input type="text" id="n-port" placeholder="Agent 端口">
+                        <input type="password" id="n-key" placeholder="安全通信密钥">
+                    </div>
+                    <button onclick="addNode()" style="width:100%; margin-bottom:16px;">推送配置并接入集群</button>
+                </div>
+                
+                <div class="card" style="flex: 1;">
+                    <h3>授权码签发中心</h3>
+                    <div class="input-group" style="margin-top: 8px;">
+                        <input type="number" id="a-dur" value="30" placeholder="有效期(天)">
+                        <button onclick="genAuthCode()">生成凭证</button>
+                    </div>
+                    <div class="table-responsive" style="max-height: 150px; overflow-y: auto;">
+                        <table style="margin-top:8px;">
+                            <thead><tr><th>Code (邀请码)</th><th>状态</th><th>属主</th></tr></thead>
+                            <tbody id="a-codes"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>全局节点健康探针</h3>
+                <div class="table-responsive">
+                    <table>
+                        <thead><tr><th>ID</th><th>节点标示</th><th>通信基址</th><th>实时心跳</th><th>操作</th></tr></thead>
+                        <tbody id="a-nodes"></tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h3>全局动态路由审计</h3>
+                <div class="table-responsive">
+                    <table>
+                        <thead><tr><th>归属用户</th><th>承载节点</th><th>分配前缀</th><th>源站指向</th><th>安全操作</th></tr></thead>
+                        <tbody id="a-routes"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>用户线路额度管理</h3>
+                <div class="table-responsive">
+                    <table>
+                        <thead><tr><th>用户</th><th>账户到期</th><th>当前线路</th><th>可用额度</th><th>操作</th></tr></thead>
+                        <tbody id="a-users"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗：配置热修改 -->
+    <div class="modal-overlay" id="edit-modal">
+        <div class="modal">
+            <h2 style="border:none; margin-bottom: 24px; color:var(--primary);">节点/线路热迁移</h2>
+            <input type="hidden" id="edit-id">
+            
+            <label style="font-size:13px; font-weight:500; color:var(--text); margin-bottom:8px; display:block;">切换承载节点 (无缝转移)</label>
+            <select id="edit-node"></select>
+            
+            <div id="edit-target-wrap">
+                <label style="font-size:13px; font-weight:500; color:var(--text); margin-bottom:8px; margin-top:8px; display:block;">修改目标源站</label>
+                <input type="text" id="edit-target">
+            </div>
+            
+            <div class="input-group" style="margin-top: 24px;">
+                <button class="outline" onclick="closeModal()" style="flex:1;">取消</button>
+                <button onclick="submitEdit()" style="flex:1;">立即热生效</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 弹窗：系统公告提示 -->
+    <div class="modal-overlay" id="ann-modal">
+        <div class="modal">
+            <div class="close-btn" onclick="document.getElementById('ann-modal').classList.remove('active')">&times;</div>
+            <h2 style="border:none; margin-bottom: 16px; color:var(--primary); font-size: 20px;">📢 最新系统公告</h2>
+            <div id="ann-modal-text" style="font-size: 15px; color: var(--text); line-height: 1.6; word-break: break-all; margin-bottom: 8px;"></div>
+            <button onclick="document.getElementById('ann-modal').classList.remove('active')" style="width: 100%; margin-top: 24px;">我已知晓</button>
+        </div>
+    </div>
+
+    <script>
+        const API = '/api';
+        let token = sessionStorage.getItem('token'), role = sessionStorage.getItem('role');
+        const BASE_DOMAIN = '.axifd.asia';
+        let nodesCache = [], selectedNode = null, isAdmin = false;
+        function escapeHtml(value) { return String(value ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c])); }
+        function escapeJs(value) { return String(value ?? '').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,'\\n'); }
+
+        function toast(msg) {
+            const el = document.getElementById('toast');
+            el.innerText = msg; el.classList.add('show');
+            setTimeout(() => el.classList.remove('show'), 3000);
+        }
+        
+        function copyText(text) {
+            const temp = document.createElement("input");
+            temp.value = text;
+            document.body.appendChild(temp);
+            temp.select();
+            document.execCommand("copy");
+            document.body.removeChild(temp);
+            toast("✅ 已复制: " + text);
+        }
+
+        async function fetchAPI(url, method='GET', body=null) {
+            try {
+                const res = await fetch(API + url, { method, headers: {'Content-Type': 'application/json', 'Authorization': token || ''}, body: body ? JSON.stringify(body) : null });
+                const data = await res.json();
+                if(res.status === 401) return logout();
+                if(!res.ok) throw new Error(data.msg || 'Error');
+                return data;
+            } catch(e) { toast(e.message); throw e; }
+        }
+
+        async function login() {
+            const data = await fetchAPI('/login', 'POST', { username: document.getElementById('l-user').value, password: document.getElementById('l-pwd').value, code: document.getElementById('l-code').value });
+            sessionStorage.setItem('token', token = data.token);
+            sessionStorage.setItem('role', role = data.role);
+            initApp();
+        }
+
+        async function initApp() {
+            const path = window.location.pathname;
+            if(!token) {
+                if(path !== '/') window.history.replaceState({}, '', '/');
+                return showView('view-login');
+            }
+            if(role === 'admin') { 
+                isAdmin = true; 
+                if(path !== '/admin-panel') window.history.pushState({}, '', '/admin-panel');
+                showView('view-admin'); 
+                loadAdmin(); 
+            } else { 
+                isAdmin = false; 
+                if(path !== '/panel') window.history.pushState({}, '', '/panel');
+                showView('view-user'); 
+                loadUser(); 
+            }
+        }
+
+        function showView(viewId) {
+            document.querySelectorAll('[id^="view-"]').forEach(v => v.style.display = 'none');
+            document.getElementById(viewId).style.display = 'block';
+            if(viewId === 'view-login') document.getElementById('view-login').style.display = 'flex'; 
+        }
+
+        function logout() { 
+            sessionStorage.clear(); 
+            sessionStorage.removeItem('annShowed'); // 注销时重置公告弹出状态
+            token = role = null; 
+            if(window.location.pathname !== '/') window.history.replaceState({}, '', '/');
+            showView('view-login'); 
+        }
+
+        async function loadUser() {
+            const data = await fetchAPI('/user/data');
+            document.getElementById('u-name').innerText = data.username;
+            document.getElementById('u-count').innerText = data.routes.length;
+            document.getElementById('u-limit').innerText = Number(data.route_limit ?? 3);
+            
+            // 公告逻辑渲染
+            if(data.announcement) {
+                document.getElementById('u-ann-scroll').innerText = data.announcement;
+                document.getElementById('u-ann-bar').style.display = 'flex';
+                if(!sessionStorage.getItem('annShowed')) {
+                    document.getElementById('ann-modal-text').innerText = data.announcement;
+                    document.getElementById('ann-modal').classList.add('active');
+                    sessionStorage.setItem('annShowed', 'true');
+                }
+            } else {
+                document.getElementById('u-ann-bar').style.display = 'none';
+            }
+
+            nodesCache = data.nodes;
+            if(!selectedNode && nodesCache.length) selectedNode = nodesCache.find(n=>n.online===1)?.id || nodesCache[0].id;
+            
+            document.getElementById('u-nodes').innerHTML = nodesCache.map(n => `
+                <div class="node-card ${selectedNode===n.id?'active':''} ${n.online===0?'offline':''}" data-node-id="${Number(n.id)}">
+                    <div class="node-name">${escapeHtml(n.name)}</div>
+                    <div style="font-size:12px; color:var(--text-light);">
+                        <span class="status-dot ${n.online===1?'dot-green':'dot-red'}"></span>${n.online===1?'在线空闲':'离线熔断'}
+                    </div>
+                </div>
+            `).join('');
+            document.querySelectorAll('[data-node-id]').forEach(el => { if (!el.classList.contains('offline')) el.addEventListener('click', () => selectNode(Number(el.dataset.nodeId))); });
+
+            document.getElementById('u-routes').innerHTML = data.routes.map(r => `
+                <tr>
+                    <td><span class="badge ${nodesCache.find(n=>n.id===r.node_id)?.online===1?'online':'offline'}">${escapeHtml(r.node_name)}</span></td>
+                    <td>
+                        <span class="copyable" onclick="copyText('http://${r.subdomain}${BASE_DOMAIN}:${r.node_port}')" title="点击一键复制">
+                            http://${escapeHtml(r.subdomain)}${BASE_DOMAIN}:${Number(r.node_port)}
+                        </span>
+                    </td>
+                    <td style="color:var(--text-light); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.target)}</td>
+                    <td>
+                        <button class="outline" style="padding:6px 12px; font-size:12px; border-radius:6px;" onclick="openModal(${Number(r.id)}, ${Number(r.node_id)}, '${escapeJs(r.target)}')">管理线路</button>
+                        <button class="danger" style="padding:6px 12px; font-size:12px; border-radius:6px; margin-left:6px;" onclick="delRoute(${r.id})">销毁</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function selectNode(id) { selectedNode = id; loadUser(); }
+
+        async function loadAdmin() {
+            const data = await fetchAPI('/admin/data');
+            document.getElementById('a-ann-input').value = data.announcement || "";
+            nodesCache = data.nodes;
+            document.getElementById('a-codes').innerHTML = data.codes.map(c => `<tr><td style="font-family:monospace; font-size:13px;">${c.code}</td><td>${c.used?'<span class="badge offline">已绑定</span>':'<span class="badge online">可使用</span>'}</td><td style="color:var(--text-light);">${c.user||'-'}</td></tr>`).join('');
+            document.getElementById('a-nodes').innerHTML = nodesCache.map(n => `<tr><td>${n.id}</td><td style="font-weight:500;">${n.name}</td><td style="font-family:monospace; color:var(--text-light);">${n.host+':'+n.port}</td><td>${n.online?'<span class="status-dot dot-green"></span>在线':'<span class="status-dot dot-red"></span>离线'}</td><td><button class="danger" style="padding:4px 10px; font-size:12px; border-radius:6px;" onclick="delNode(${n.id})">强踢</button></td></tr>`).join('');
+            document.getElementById('a-routes').innerHTML = data.routes.map(r => `<tr><td style="font-weight:500;">${r.user}</td><td><span class="badge">${r.node_name}</span></td><td style="font-family:monospace;">${r.subdomain}</td><td style="color:var(--text-light);">${r.target}</td><td><button class="outline" style="padding:4px 10px; font-size:12px; border-radius:6px;" onclick="openModal(${r.id}, ${r.node_id}, '${r.target}')">越权改</button> <button class="danger" style="padding:4px 10px; font-size:12px; border-radius:6px; margin-left:4px;" onclick="delRoute(${r.id})">封禁</button></td></tr>`).join('');
+            document.getElementById('a-users').innerHTML = (data.users || []).map(u => `<tr><td style="font-weight:500;">${escapeHtml(u.username)}</td><td>${escapeHtml(u.expire)}</td><td>${Number(u.route_count)}</td><td><input id="limit-${encodeURIComponent(u.username)}" type="number" min="0" max="1000" value="${Number(u.route_limit)}" style="width:90px; margin:0;"></td><td><button class="outline" style="padding:4px 10px; font-size:12px; border-radius:6px;" onclick="updateUserLimit('${escapeJs(u.username)}')">保存额度</button></td></tr>`).join('');
+        }
+        
+        async function updateAnnouncement() {
+            const text = document.getElementById('a-ann-input').value;
+            await fetchAPI('/admin/update_announcement', 'POST', {text: text});
+            toast("✅ 公告已发布更新");
+        }
+
+        async function addRoute() {
+            if(!selectedNode) return toast("请先选择一个节点");
+            await fetchAPI('/user/add_route', 'POST', { node_id: selectedNode, subdomain: document.getElementById('u-sub').value, target: document.getElementById('u-target').value });
+            toast("部署成功"); loadUser();
+        }
+        async function delRoute(id) {
+            if(!confirm("⚠️ 确认销毁此网络链路? 此操作将从 CF 边缘网络同步抹除。")) return;
+            await fetchAPI(isAdmin ? '/admin/delete_route' : '/user/delete_route', 'POST', {id});
+            toast("链路已销毁"); isAdmin ? loadAdmin() : loadUser();
+        }
+
+        function openModal(routeId, nodeId, target) {
+            document.getElementById('edit-id').value = routeId;
+            document.getElementById('edit-target').value = target;
+            document.getElementById('edit-node').innerHTML = nodesCache.map(n => `<option value="${n.id}" ${n.id===nodeId?'selected':''} ${n.online===0?'disabled':''}>${n.name} ${n.online===0?'(当前处于离线熔断状态)':''}</option>`).join('');
+            if(!isAdmin) document.getElementById('edit-target').readOnly = false;
+            document.getElementById('edit-modal').classList.add('active');
+        }
+        function closeModal() { document.getElementById('edit-modal').classList.remove('active'); }
+        
+        async function submitEdit() {
+            const id = document.getElementById('edit-id').value;
+            const target = document.getElementById('edit-target').value;
+            const node_id = document.getElementById('edit-node').value;
+            await fetchAPI(isAdmin ? '/admin/update_route' : '/user/update_route', 'POST', {id, target, node_id});
+            toast("路由热重载下发成功"); closeModal();
+            isAdmin ? loadAdmin() : loadUser();
+        }
+
+        async function addNode() { await fetchAPI('/admin/add_node', 'POST', {name: document.getElementById('n-name').value, host: document.getElementById('n-host').value, port: document.getElementById('n-port').value, key: document.getElementById('n-key').value}); toast("节点握手接入成功"); loadAdmin(); }
+        async function delNode(id) { if(confirm("确认将此节点从分布式集群中移除?")) { await fetchAPI('/admin/delete_node', 'POST', {id}); toast("节点已踢出集群"); loadAdmin(); } }
+        async function genAuthCode() { await fetchAPI('/admin/generate', 'POST', {duration: document.getElementById('a-dur').value}); loadAdmin(); }
+        async function updateUserLimit(username) {
+            const input = document.getElementById('limit-' + encodeURIComponent(username));
+            await fetchAPI('/admin/update_user_limit', 'POST', {username, route_limit: input.value});
+            toast("用户线路额度已更新"); loadAdmin();
+        }
+
+        initApp();
+    </script>
+</body>
+</html>
