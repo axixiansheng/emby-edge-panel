@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>阿昔反代 | Emby Edge Network</title>
+    <title>Emby Edge Network</title>
     <style>
         :root { 
             --primary: #2563eb; 
@@ -189,7 +189,7 @@
         <!-- 视图：登陆与宣传页 -->
         <div id="view-login" class="landing-wrap">
             <div class="landing-info">
-                <h1>阿昔反代 <span class="badge" style="background:var(--primary); color:#fff;">Edge</span></h1>
+                <h1><span data-panel-name>Emby Edge</span> <span class="badge" style="background:var(--primary); color:#fff;">Edge</span></h1>
                 <div class="slogan">专为流媒体打造的现代化边缘分发网络平台</div>
                 
                 <div class="feature-item">
@@ -226,7 +226,7 @@
         <!-- 视图：用户工作台 -->
         <div id="view-user">
             <div class="header-bar">
-                <h1>阿昔反代 <span class="badge" style="font-weight:normal;">用户: <span id="u-name"></span></span></h1>
+                <h1><span data-panel-name>Emby Edge</span> <span class="badge" style="font-weight:normal;">用户: <span id="u-name"></span></span></h1>
                 <div style="display:flex; align-items:center; gap: 12px; margin-left: auto;">
                     <span class="badge" style="font-size:14px; background:#fff; border: 1px solid rgba(0,0,0,0.1);">线路: <span id="u-count"></span>/<span id="u-limit">3</span></span>
                     <button class="outline" onclick="logout()">退出</button>
@@ -264,7 +264,7 @@
         <!-- 视图：上帝视角（主控） -->
         <div id="view-admin">
             <div class="header-bar">
-                <h1>阿昔系统引擎 <span class="badge" style="background:#1e293b; color:#fff;">Master Mode</span></h1>
+                <h1><span data-panel-name>Emby Edge</span> <span class="badge" style="background:#1e293b; color:#fff;">Master Mode</span></h1>
                 <button class="outline" style="margin-left: auto;" onclick="logout()">退出</button>
             </div>
             
@@ -371,10 +371,16 @@
     <script>
         const API = '/api';
         let token = sessionStorage.getItem('token'), role = sessionStorage.getItem('role');
-        const BASE_DOMAIN = '.axifd.asia';
+        let BASE_DOMAIN = '';
         let nodesCache = [], selectedNode = null, isAdmin = false;
         function escapeHtml(value) { return String(value ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c])); }
         function escapeJs(value) { return String(value ?? '').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,'\\n'); }
+        function applyBrand(data) {
+            BASE_DOMAIN = '.' + String(data.base_domain || '').replace(/^\./, '');
+            const name = data.panel_name || 'Emby Edge';
+            document.querySelectorAll('[data-panel-name]').forEach(el => el.textContent = name);
+            document.title = name + ' | Emby Edge Network';
+        }
 
         function toast(msg) {
             const el = document.getElementById('toast');
@@ -444,6 +450,7 @@
 
         async function loadUser() {
             const data = await fetchAPI('/user/data');
+            applyBrand(data);
             document.getElementById('u-name').innerText = data.username;
             document.getElementById('u-count').innerText = data.routes.length;
             document.getElementById('u-limit').innerText = Number(data.route_limit ?? 3);
@@ -495,6 +502,7 @@
 
         async function loadAdmin() {
             const data = await fetchAPI('/admin/data');
+            applyBrand(data);
             document.getElementById('a-ann-input').value = data.announcement || "";
             nodesCache = data.nodes;
             document.getElementById('a-codes').innerHTML = data.codes.map(c => `<tr><td style="font-family:monospace; font-size:13px;">${c.code}</td><td>${c.used?'<span class="badge offline">已绑定</span>':'<span class="badge online">可使用</span>'}</td><td style="color:var(--text-light);">${c.user||'-'}</td></tr>`).join('');

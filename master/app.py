@@ -16,7 +16,8 @@ if os.path.exists('/opt/emby_panel/.env'):
 PANEL_PASSWORD = ENV.get('PANEL_PASSWORD', 'admin')
 CF_API_TOKEN = ENV.get('CF_API_TOKEN', '')
 CF_ZONE_ID = ENV.get('CF_ZONE_ID', '')
-BASE_DOMAIN = ENV.get('BASE_DOMAIN', 'axifd.asia')
+BASE_DOMAIN = ENV.get('BASE_DOMAIN', 'example.com')
+PANEL_NAME = ENV.get('PANEL_NAME', 'Emby Edge')
 
 DB_FILE = "/opt/emby_panel/db/panel.db"
 MAX_BODY = 1024 * 1024
@@ -389,6 +390,8 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 
                 return self.send_resp(200, {
                     'username': session['username'],
+                    'base_domain': BASE_DOMAIN,
+                    'panel_name': PANEL_NAME,
                     'expire': time.strftime("%Y-%m-%d", time.localtime(exp)),
                     'route_limit': route_limit,
                     'nodes': [{'id': n[0], 'name': n[1], 'online': n[4]} for n in nodes_data],
@@ -402,6 +405,8 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 routes = conn.execute('SELECT r.id, r.username, r.subdomain, r.target, n.name, n.id FROM routes r JOIN nodes n ON r.node_id = n.id').fetchall()
                 users = conn.execute('SELECT u.username, u.expire_time, u.route_limit, COUNT(r.id) FROM users u LEFT JOIN routes r ON r.username=u.username GROUP BY u.username, u.expire_time, u.route_limit ORDER BY u.username').fetchall()
                 return self.send_resp(200, {
+                    'base_domain': BASE_DOMAIN,
+                    'panel_name': PANEL_NAME,
                     'codes': [{'code': c[0], 'dur': c[1], 'used': c[2], 'user': c[3]} for c in codes],
                     'nodes': [{'id': n[0], 'name': n[1], 'host': n[2], 'port': n[3], 'online': n[4]} for n in nodes_full],
                     'routes': [{'id': r[0], 'user': r[1], 'subdomain': r[2], 'target': r[3], 'node_name': r[4], 'node_id': r[5]} for r in routes],

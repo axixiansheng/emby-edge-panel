@@ -6,6 +6,7 @@ set -eu
 : "${CF_ZONE_ID:?CF_ZONE_ID must be set}"
 : "${BASE_DOMAIN:?BASE_DOMAIN must be set}"
 : "${GLOBAL_SECRET_KEY:?GLOBAL_SECRET_KEY must be set}"
+PANEL_NAME=${PANEL_NAME:-Emby Edge}
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 [ -f "$SCRIPT_DIR/master/app.py" ] || { echo "Missing master/app.py" >&2; exit 1; }
@@ -34,6 +35,7 @@ CF_API_TOKEN="$CF_API_TOKEN"
 CF_ZONE_ID="$CF_ZONE_ID"
 BASE_DOMAIN="$BASE_DOMAIN"
 GLOBAL_SECRET_KEY="$GLOBAL_SECRET_KEY"
+PANEL_NAME="$PANEL_NAME"
 EOF
 chmod 600 /opt/emby_panel/.env
 
