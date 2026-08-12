@@ -90,6 +90,7 @@ The master installer disables known legacy links named `default`, `emby-panel-ht
 - Never commit `.env`, databases, API tokens, passwords, or SSH credentials
 - Use a separate long random secret for every Worker
 - Keep Worker clocks synchronized; requests with clock skew over 60 seconds are rejected
+- On restricted NAT/LXC/OpenVZ containers, Chrony may lack permission to adjust time. The installer now warns and continues; the hosting provider must keep the host clock accurate
 - Restrict Worker `/api/` to the master public IP
 - Configure HTTPS before exposing the panel to untrusted users
 - Review shell scripts before running them as root

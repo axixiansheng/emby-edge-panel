@@ -108,17 +108,36 @@ output_log="/var/log/emby-agent.log"
 error_log="/var/log/emby-agent.err"
 depend() {
     need net
-    after nginx chronyd
+    after nginx
 }
 EOF
 chmod +x /etc/init.d/emby-agent
 
-rc-update add chronyd default
 rc-update add nginx default
 rc-update add emby-agent default
 python3 -m py_compile /opt/emby_agent/agent.py
 nginx -t
-rc-service chronyd restart || rc-service chronyd start
+
+# Container/NAT providers often remove CAP_SYS_TIME. In that environment
+# chronyd fails with "adjtimex ... Operation not permitted" even for root.
+# Time synchronization is useful but must not prevent the Worker from starting.
+if rc-service chronyd restart 2>/tmp/emby-chrony-error.log; then
+    rc-update add chronyd default >/dev/null 2>&1 || true
+    echo 'Chrony 已启动，系统时间会自动同步。'
+else
+    rc-service chronyd stop >/dev/null 2>&1 || true
+    rc-update del chronyd default >/dev/null 2>&1 || true
+    echo '警告：当前虚拟化环境不允许 Chrony 调整系统时间，已跳过。' >&2
+    if grep -q 'Operation not permitted' /tmp/emby-chrony-error.log 2>/dev/null; then
+        echo '这是 NAT/LXC/OpenVZ 容器缺少 CAP_SYS_TIME 的常见限制。' >&2
+    fi
+    echo 'Worker 仍会继续安装，但节点 UTC 时间必须由宿主机保持准确（误差不超过 60 秒）。' >&2
+fi
+rm -f /tmp/emby-chrony-error.log
+
 rc-service nginx restart || rc-service nginx start
 rc-service emby-agent restart || rc-service emby-agent start
+rc-service nginx status
 rc-service emby-agent status
+echo "当前节点 UTC 时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+echo 'Worker 安装完成。内部服务端口: 12345，Agent: 127.0.0.1:8081'
