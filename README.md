@@ -1,128 +1,124 @@
 # Emby Edge Panel
 
-An open-source Emby reverse-proxy control panel with one master and multiple signed Worker nodes.
+Emby Edge Panel 是一个面向小型社群与私有流媒体服务的多节点反向代理控制平面。项目采用单主控、多 Worker 架构，将 Cloudflare DNS、线路生命周期、节点健康检查、HTTPS 证书分发和 Nginx 动态路由统一到一个轻量化管理界面中。
 
-## Features
+## 设计目标
 
-- Multi-user panel with invitation codes and per-user route limits
-- Cloudflare DNS automation
-- Route creation, source updates, and hot migration between nodes
-- Signed master-to-Worker synchronization and health checks
-- Dynamic Nginx maps for streaming proxy routes
-- Browser-trusted HTTPS on every Worker with automatic HTTP/TLS protocol detection
-- Automatic Let's Encrypt wildcard certificate issuance and renewal through Cloudflare DNS-01
-- Alpine/OpenRC Worker support, including NAT servers
-- SQLite WAL, operation logs, node health state, and atomic map writes
+- 在 2 核 2 GB 等入门 VPS 上稳定承载数十名用户，并保留继续扩展的空间。
+- 用户只保存一个固定入口；源站变更或节点迁移由主控热更新，无需修改播放器配置。
+- Worker 不保存 Cloudflare 凭据，证书与基础域名由主控集中管理。
+- 同时支持独立公网服务器和 NAT VPS，公网端口完全以服务商的实际映射为准。
+- 避免引入数据库集群、消息队列等高维护组件，保持部署和故障恢复简单可控。
 
-## Architecture
+## 技术架构
 
-- Master: Debian/Ubuntu, Nginx on port 80, Python API on `127.0.0.1:8080`
-- Worker: Alpine Linux, Nginx stream on internal port `12345`, HTTP backend on `127.0.0.1:12346`, HTTPS backend on `127.0.0.1:12347`, Agent on `127.0.0.1:8081`
-- NAT Worker: map a public service port such as `54321` to internal port `12345`; enter `54321` in the panel
+主控由 Nginx、Python `ThreadingHTTPServer` 和 SQLite WAL 组成。读请求并行处理，注册、授权码签发和线路部署等状态变更进入 FIFO 队列串行提交，降低突发并发下的 SQLite 锁竞争。Cloudflare DNS 使用幂等更新，节点切换遵循“新节点预热、DNS 更新、数据库提交、旧节点清理”的顺序，减少迁移窗口中的服务中断。
 
-## Download
+Worker 使用 Nginx Stream 的 TLS 预读能力，在同一个内部端口 `12345` 自动区分 HTTP 与 HTTPS。HTTP 和 TLS 请求分别转发到本地反向代理后端，动态 Map 由签名 Agent 原子写入并热重载。主控与 Worker 之间使用 HMAC-SHA256 防止伪造和重放；通配符证书包使用由共享密钥派生的 AES-GCM 密钥加密传输。
+
+证书采用 Cloudflare DNS-01 验证。整个集群共享主控维护的 `BASE_DOMAIN` 通配符证书，Worker 每日自动拉取续期结果，因此新增节点无需填写基础域名、Zone ID、API Token 或证书路径。
+
+## 主要能力
+
+- 用户注册、授权码和可调整线路额度
+- 用户名大小写字母/数字约束与不区分大小写的唯一性控制
+- 自动生成 `用户名-线路缩写` 前缀，例如 `Jack` + `wwj` → `jack-wwj`
+- Cloudflare DNS-only 记录创建、更新与删除
+- 目标源站热更新和跨节点热迁移
+- Worker 心跳、离线熔断与管理端状态展示
+- HTTP/HTTPS 同端口识别、Range 请求和 WebSocket 转发
+- 集群通配符证书集中签发、加密分发和自动续期
+- Alpine/OpenRC Worker 与 Debian/Ubuntu/systemd 主控
+- 服务后台运行、开机自启及安装菜单状态检查
+- 独立、彻底的主控和 Worker 卸载流程
+
+## 下载
+
+先用一条命令清理旧目录、创建目录并下载最新版：
 
 ```sh
-rm -rf emby-edge-panel
-mkdir emby-edge-panel
-curl -fsSL https://github.com/axixiansheng/emby-edge-panel/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1 -C emby-edge-panel
-cd emby-edge-panel
+cd ~ && rm -rf emby-edge-panel && mkdir emby-edge-panel && curl -fsSL https://github.com/axixiansheng/emby-edge-panel/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1 -C emby-edge-panel && cd emby-edge-panel
 ```
 
-This produces `emby-edge-panel`, not `emby-edge-panel-main`.
+随后按服务器角色运行一个安装命令。
 
-## Interactive Master Install
+主控：
 
 ```sh
 sudo ./install-master.sh
 ```
 
-再次运行安装器时，会自动读取 `/opt/emby_panel/.env` 中的现有配置并在菜单中显示为已设置；密码、Token 和共享密钥不会明文显示。直接回车可保留当前值。命令行预先导出的环境变量优先于现有配置。
-
-The menu lets you enter or modify:
-
-- panel administrator password
-- Cloudflare API Token
-- Cloudflare Zone ID
-- base domain
-- Worker shared secret
-- panel name
-- optional panel access domain, such as `example.com` or `panel.example.com`
-
-`BASE_DOMAIN` is the single route domain for the whole cluster. Every Worker receives it from the master, so all user routes remain `https://subdomain.BASE_DOMAIN:port` regardless of which Worker is selected.
-
-The panel access domain is independent from user route subdomains. If configured, the installer creates a DNS-only Cloudflare record pointing to the master, enables a matching HTTPS virtual host, and does not claim Nginx's default port-80 site. If left empty, the panel is served by master IP. When another website already owns `default_server` on port 80, the installer stops with a clear message and asks you to configure a panel domain.
-
-Existing environment variables are used as defaults. Non-interactive automation remains supported:
-
-```sh
-export PANEL_PASSWORD='choose-a-strong-password'
-export CF_API_TOKEN='cloudflare-api-token'
-export CF_ZONE_ID='cloudflare-zone-id'
-export BASE_DOMAIN='example.com'
-export GLOBAL_SECRET_KEY='long-random-shared-secret'
-export PANEL_NAME='My Emby Edge'
-export PANEL_DOMAIN='panel.example.com'
-sudo -E ./install-master.sh </dev/null
-```
-
-## Interactive Worker Install
+Worker：
 
 ```sh
 sudo ./install-worker.sh
 ```
 
-The Worker installer asks for:
+再次运行安装器会读取现有配置。密码、Token 和共享密钥只显示“已设置”，直接回车即可保留。菜单同时提供服务状态检查。
 
-- master public IP
-- this Worker's shared HMAC secret
+## 主控配置
 
-The Worker does not need the base domain, Cloudflare Token, Zone ID, certificate settings, or a manually chosen certificate ID. It generates a persistent internal node ID, authenticates to the master with HMAC, receives the cluster base domain, and downloads an AES-GCM-encrypted Worker certificate package. The same internal port `12345` then accepts both HTTP and HTTPS. A daily job refreshes the certificate from the master after renewal.
+主控安装器支持 Debian 和 Ubuntu，交互菜单包括：
 
-Cloudflare credentials remain only on the master at `/root/.secrets/emby-cloudflare.ini`. Use a restricted token limited to the cluster DNS zone; do not reuse a global API key.
+- 面板管理员密码
+- Cloudflare API Token
+- Cloudflare Zone ID
+- 集群基础域名
+- Worker 全局共享密钥
+- 面板名称
+- 可选面板访问域名
 
-Non-interactive Worker installation is also supported:
+必填项未完成时安装器会列出缺失内容并拒绝开始。面板域名未配置时使用主控 IP；若 80 端口已有其他默认站点，安装器会提示配置独立面板域名，避免覆盖现有服务。
 
-```sh
-export MASTER_IP='203.0.113.10'
-export SECRET_KEY='same-node-key-configured-in-master'
-sudo -E ./install-worker.sh </dev/null
+## Worker 与 NAT 端口
+
+Worker 安装时只需填写主控公网 IP 和共享密钥。Worker 内部服务端口固定为 `12345`，但公网端口没有任何固定值。
+
+例如服务商控制台提供以下映射：
+
+```text
+公网 45678 → 内部 12345
 ```
 
-## Uninstall
+则在主控添加节点时，“线路公网端口”填写 `45678`。如果主控通过同一个映射端口访问 Worker API，“Worker 通信公网端口”也填写 `45678`；若服务商另行映射通信端口，则按控制台实际值分别填写。用户入口会生成：
+
+```text
+https://用户名-线路缩写.基础域名:45678
+```
+
+公网端口可以是服务商允许的任意端口。SSH 映射端口与 Worker 服务端口无关。
+
+## 授权码与线路命名
+
+授权码中间的数字代表注册用户初始线路额度，不再代表有效天数。例如中间数字为 `5`，该用户注册后可创建 5 条线路，管理员之后仍可在用户额度模块修改。
+
+用户名仅允许 2–24 位大小写英文字母和数字。线路输入框填写简短英文缩写，例如“哇哇叫”填写 `wwj`。系统会将用户名转为小写并组合为 `jack-wwj`；若完整前缀已存在，系统会要求修改缩写。
+
+## 并发策略
+
+面板使用多线程 HTTP 服务处理页面、数据读取和队列查询。注册、授权码签发、线路部署等写操作通过轻量 FIFO 队列有序执行，前端实时展示前方等待人数，并在轮到当前用户时自动提交。该方案针对几十人规模和 2C2G 主控设计，避免额外部署 Redis、数据库代理或负载均衡集群。
+
+## 更新
+
+重新执行“下载”中的单行命令，再运行对应安装器。安装器会读取已安装配置并备份应用和 Nginx 配置；主控数据库和 Worker 节点标识会保留。
+
+## 卸载
 
 ```sh
 sudo ./uninstall.sh
 ```
 
-The uninstaller menu can remove the master, Worker, both, or timestamped project backups. It can preserve the master database in a timestamped directory under `/root`. System packages such as Nginx and Python are not removed.
+卸载器会检测主控和 Worker 是否存在，可分别删除。Worker 卸载会清理 Agent、OpenRC 服务、Nginx Map/Stream 配置、证书、证书同步任务、日志和备份；主控卸载会清理 systemd 服务、面板站点、Cloudflare 凭据、Certbot 续期配置和集群通配符证书。主控和 Worker 都不存在后，卸载器才会删除当前项目目录。
 
-## NAT Workers
+系统级 Nginx、Python、Certbot 等软件包不会自动删除，以免影响同机其他服务。
 
-The Worker always listens internally on `12345` and automatically distinguishes HTTP from TLS. If a provider maps public `54321` to internal `12345`, configure the master panel with the public host and port `54321`; the generated user route is `https://subdomain.example.com:54321`.
+## 安全建议
 
-SSH mapping ports are unrelated to Worker service ports.
-
-## Updating
-
-Pull or download the latest source and run the relevant installer again. Installers back up existing application and Nginx directories before replacement. The master installer preserves an existing `panel.db`.
-
-When upgrading an older HTTP-only Worker, run the new `install-worker.sh` and provide only the master IP and shared secret. Existing route map files are preserved, and the Worker receives the base domain and HTTPS certificate from the master.
-
-The master installer disables known legacy links named `default`, `emby-panel-http`, and `emby-panel` before enabling the current site. Other Nginx websites are preserved. If another website is already configured as `default_server` on port 80, remove `default_server` from one of the sites or choose which site should own the default port.
-
-## Security
-
-- Never commit `.env`, databases, API tokens, passwords, or SSH credentials
-- Use one long random cluster secret and keep the master and every Worker consistent
-- Keep Worker clocks synchronized; requests with clock skew over 60 seconds are rejected
-- On restricted NAT/LXC/OpenVZ containers, Chrony may lack permission to adjust time. The installer now warns and continues; the hosting provider must keep the host clock accurate
-- Restrict Worker `/api/` to the master public IP
-- Cloudflare credentials stay only on the master; Workers never receive the API Token or Zone ID
-- Revoke and replace the master Cloudflare token immediately if the master is compromised
-- Worker wildcard certificates cover one base domain. All route hostnames must remain direct DNS records (`proxied: false`) pointing to the selected Worker
-- Configure HTTPS for the master panel before exposing it to untrusted users
-- Review shell scripts before running them as root
+- Cloudflare Token 仅授予指定 Zone 的 DNS 编辑权限。
+- 使用足够长的随机共享密钥，并确保主控与所有 Worker 保持一致。
+- Worker 系统时间误差必须小于 60 秒；受限 NAT 容器无法运行 Chrony 时由宿主机提供准确时间。
+- Cloudflare 路线记录保持 DNS-only，任意端口不会经过 Cloudflare HTTP 代理。
+- 不要提交 `.env`、数据库、Token、密码、私钥或 SSH 凭据。
 
 ## License
 

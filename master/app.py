@@ -1,7 +1,7 @@
 import http.server, json, urllib.request, urllib.error, base64
 import subprocess, sqlite3, time, random, string
 import os, re, threading, hmac, hashlib, logging
-from urllib.parse import urlparse, urlsplit
+from urllib.parse import urlparse, urlsplit, parse_qs
 from ipaddress import ip_address
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -30,6 +30,11 @@ HEALTH_SKEW = 120
 HEALTH_NONCE = os.environ.get('EMBY_HEALTH_NONCE', '')
 login_failures = {}
 login_lock = threading.Lock()
+queue_lock = threading.Lock()
+write_lock = threading.Lock()
+queue_tickets = []
+queue_created = {}
+QUEUE_TTL = 120
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger('emby-panel')
 
@@ -42,6 +47,40 @@ def db_connect():
 
 def valid_subdomain(value):
     return bool(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', value or ''))
+
+def normalize_username(value):
+    value = str(value or '').strip()
+    return value if re.fullmatch(r'[A-Za-z0-9]{2,24}', value) else ''
+
+def normalize_route_suffix(value):
+    value = str(value or '').strip().lower()
+    return value if re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?', value) else ''
+
+def queue_cleanup():
+    now = time.time()
+    expired = [ticket for ticket in queue_tickets if now - queue_created.get(ticket, 0) > QUEUE_TTL]
+    for ticket in expired:
+        queue_tickets.remove(ticket)
+        queue_created.pop(ticket, None)
+
+def queue_join():
+    with queue_lock:
+        queue_cleanup()
+        ticket = os.urandom(12).hex()
+        queue_tickets.append(ticket)
+        queue_created[ticket] = time.time()
+        return ticket, len(queue_tickets) - 1
+
+def queue_position(ticket):
+    with queue_lock:
+        queue_cleanup()
+        try: return queue_tickets.index(ticket)
+        except ValueError: return -1
+
+def queue_release(ticket):
+    with queue_lock:
+        if ticket in queue_tickets: queue_tickets.remove(ticket)
+        queue_created.pop(ticket, None)
 
 def valid_target(value):
     try:
@@ -57,21 +96,28 @@ def valid_target(value):
 def init_db():
     with db_connect() as conn:
         conn.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT, expire_time REAL)')
-        conn.execute('CREATE TABLE IF NOT EXISTS auth_codes (code TEXT PRIMARY KEY, duration INTEGER, is_used INTEGER, bound_user TEXT)')
+        conn.execute('CREATE TABLE IF NOT EXISTS auth_codes (code TEXT PRIMARY KEY, duration INTEGER, is_used INTEGER, bound_user TEXT, route_limit INTEGER)')
         conn.execute('CREATE TABLE IF NOT EXISTS routes (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, subdomain TEXT, target TEXT, node_id INTEGER)')
         conn.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
-        conn.execute('CREATE TABLE IF NOT EXISTS nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, host TEXT, port TEXT, secret_key TEXT, is_online INTEGER DEFAULT 1)')
+        conn.execute('CREATE TABLE IF NOT EXISTS nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, host TEXT, port TEXT, secret_key TEXT, is_online INTEGER DEFAULT 1, public_port TEXT)')
         conn.execute('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, username TEXT, role TEXT, expire_time REAL)')
         
         try: conn.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
         except: pass
         try: conn.execute('ALTER TABLE users ADD COLUMN route_limit INTEGER DEFAULT 3')
         except: pass
+        try: conn.execute('ALTER TABLE auth_codes ADD COLUMN route_limit INTEGER')
+        except: pass
+        conn.execute('UPDATE auth_codes SET route_limit=duration WHERE route_limit IS NULL')
         conn.execute('UPDATE users SET route_limit=3 WHERE route_limit IS NULL OR route_limit < 0')
         try: conn.execute('ALTER TABLE nodes ADD COLUMN is_online INTEGER DEFAULT 1')
         except: pass
+        try: conn.execute('ALTER TABLE nodes ADD COLUMN public_port TEXT')
+        except: pass
         
         conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_routes_subdomain ON routes(subdomain)')
+        try: conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users(username COLLATE NOCASE)')
+        except sqlite3.IntegrityError: logger.warning('legacy usernames differ only by letter case; new registrations remain normalized and unique')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_routes_username ON routes(username)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_sessions_expire ON sessions(expire_time)')
         conn.execute('CREATE TABLE IF NOT EXISTS operation_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT, route_id INTEGER, status TEXT, detail TEXT, created_at REAL)')
@@ -80,8 +126,8 @@ init_db()
 
 def hash_pwd(pwd): return hashlib.pbkdf2_hmac('sha256', pwd.encode('utf-8'), b'emby-panel-v1', 240000).hex() if pwd else ''
 def legacy_hash_pwd(pwd): return hashlib.sha256(pwd.encode('utf-8')).hexdigest() if pwd else ''
-def generate_auth_code(duration):
-    return f"{''.join(random.choices(string.ascii_letters+string.digits, k=4))}_{duration}_{''.join(random.choices(string.ascii_letters+string.digits, k=8))}"
+def generate_auth_code(route_limit):
+    return f"{''.join(random.choices(string.ascii_letters+string.digits, k=4))}_{route_limit}_{''.join(random.choices(string.ascii_letters+string.digits, k=8))}"
 
 def req_with_retry(req, retries=3, timeout=8):
     for i in range(retries):
@@ -159,7 +205,7 @@ def cf_api(action, subdomain, target_host=""):
     if action == 'add':
         # Create and update use the same idempotent path. This also converts an
         # existing proxied record to DNS-only, which is required for arbitrary
-        # Worker ports such as NAT-mapped 54321.
+        # Worker service ports selected by the NAT provider.
         return cf_set(subdomain, target_host)
 
     full_domain = f"{subdomain}.{BASE_DOMAIN}"
@@ -225,6 +271,15 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         return None
 
     def do_POST(self):
+        # A small VPS and SQLite perform best when state-changing requests are
+        # admitted in one FIFO-sized lane. Read traffic and queue polling remain
+        # concurrent through ThreadingHTTPServer.
+        if self.path == '/queue/join':
+            return self._do_POST()
+        with write_lock:
+            return self._do_POST()
+
+    def _do_POST(self):
         origin = self.headers.get('Origin')
         host = self.headers.get('Host', '').split(':', 1)[0]
         if origin:
@@ -237,6 +292,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if len_ == 0: return self.send_resp(400, {'msg': 'No data'})
         try: data = json.loads(self.rfile.read(len_).decode('utf-8'))
         except (ValueError, UnicodeDecodeError): return self.send_resp(400, {'msg': 'Invalid JSON'})
+
+        if self.path == '/queue/join':
+            ticket, position = queue_join()
+            return self.send_resp(200, {'ticket': ticket, 'position': position})
 
         # Worker installers and daily certificate refresh jobs authenticate
         # before panel login with the cluster-wide HMAC secret.
@@ -269,8 +328,14 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             })
         
         if self.path == '/login':
-            user, pwd, code = data.get('username', '').strip(), data.get('password', '').strip(), data.get('code', '').strip()
-            if not user: return self.send_resp(400, {'msg': '用户名不能为空'})
+            raw_user = data.get('username', '')
+            user, pwd, code = normalize_username(raw_user), data.get('password', '').strip(), data.get('code', '').strip()
+            ticket = str(data.get('queue_ticket', ''))
+            if code:
+                position = queue_position(ticket)
+                if position != 0: return self.send_resp(409, {'msg': '尚未轮到当前请求', 'position': max(position, 0)})
+                queue_release(ticket)
+            if not user: return self.send_resp(400, {'msg': '用户名只能使用 2-24 位大小写英文字母和数字'})
             client_ip = self.client_address[0]
             with login_lock:
                 failures, blocked_until = login_failures.get(client_ip, (0, 0))
@@ -286,15 +351,15 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                     return self.send_resp(200, {'token': token, 'role': 'admin'})
                 
                 if code: 
-                    code_rec = conn.execute('SELECT duration, is_used FROM auth_codes WHERE code=?', (code,)).fetchone()
+                    code_rec = conn.execute('SELECT route_limit, is_used FROM auth_codes WHERE code=?', (code,)).fetchone()
                     if not code_rec: return self.send_resp(403, {'msg': '授权码无效'})
                     if code_rec[1] == 1: return self.send_resp(403, {'msg': '授权码已被使用'})
                     if not pwd: return self.send_resp(400, {'msg': '激活时请设置自定义密码'})
                     
-                    user_exist = conn.execute('SELECT username FROM users WHERE username=?', (user,)).fetchone()
+                    user_exist = conn.execute('SELECT username FROM users WHERE username=? COLLATE NOCASE', (user,)).fetchone()
                     if user_exist: return self.send_resp(403, {'msg': '用户名已存在，请直接密码登录'})
                     
-                    conn.execute('INSERT INTO users (username, password_hash, expire_time) VALUES (?, ?, ?)', (user, hash_pwd(pwd), now + (code_rec[0] * 86400)))
+                    conn.execute('INSERT INTO users (username, password_hash, expire_time, route_limit) VALUES (?, ?, ?, ?)', (user, hash_pwd(pwd), now + (3650 * 86400), code_rec[0]))
                     conn.execute('UPDATE auth_codes SET is_used=1, bound_user=? WHERE code=?', (user, code))
                 else: 
                     db_user = conn.execute('SELECT password_hash, expire_time FROM users WHERE username=?', (user,)).fetchone()
@@ -318,8 +383,14 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         username, is_admin = session['username'], session['role'] == 'admin'
 
         if self.path == '/user/add_route':
-            sub, target, node_id = data.get('subdomain', '').strip().lower(), data.get('target', '').strip(), data.get('node_id')
-            if not valid_subdomain(sub): return self.send_resp(400, {'msg': 'Invalid subdomain'})
+            suffix = normalize_route_suffix(data.get('subdomain', ''))
+            sub = f'{username.lower()}-{suffix}' if suffix else ''
+            target, node_id = data.get('target', '').strip(), data.get('node_id')
+            ticket = str(data.get('queue_ticket', ''))
+            position = queue_position(ticket)
+            if position != 0: return self.send_resp(409, {'msg': '尚未轮到当前请求', 'position': max(position, 0)})
+            queue_release(ticket)
+            if not valid_subdomain(sub): return self.send_resp(400, {'msg': '线路缩写只能使用小写字母、数字和连字符'})
             if not valid_target(target): return self.send_resp(400, {'msg': 'Invalid target URL'})
             if not sub or not target or not node_id: return self.send_resp(400, {'msg': '参数缺失'})
             with db_connect() as conn:
@@ -328,7 +399,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                     limit_row = conn.execute('SELECT route_limit FROM users WHERE username=?', (username,)).fetchone()
                     route_limit = limit_row[0] if limit_row else 3
                     if route_count >= route_limit: return self.send_resp(403, {'msg': f'额度已满({route_limit}条)'})
-                if conn.execute('SELECT id FROM routes WHERE subdomain=?', (sub,)).fetchone(): return self.send_resp(403, {'msg': '子域名已被占用'})
+                if conn.execute('SELECT id FROM routes WHERE subdomain=?', (sub,)).fetchone(): return self.send_resp(403, {'msg': f'线路前缀 {sub} 已存在，请修改缩写后重试'})
                 node = conn.execute('SELECT host, port, secret_key, is_online FROM nodes WHERE id=?', (node_id,)).fetchone()
                 if not node: return self.send_resp(404, {'msg': '节点不存在'})
                 if node[3] == 0: return self.send_resp(403, {'msg': '节点离线，禁止部署'})
@@ -342,7 +413,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                     try: cf_api('delete', sub)
                     except: pass
                     return self.send_resp(500, {'msg': str(e)})
-            return self.send_resp(200, {'msg': '部署成功'})
+            return self.send_resp(200, {'msg': '部署成功', 'subdomain': sub})
 
         elif self.path in ('/user/update_route', '/admin/update_route'): 
             route_id, new_node_id, new_target = data.get('id'), data.get('node_id'), data.get('target', '').strip()
@@ -399,11 +470,20 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if not is_admin: return self.send_resp(403, {'msg': 'Forbidden'})
 
         if self.path == '/admin/generate':
-            code = generate_auth_code(int(data.get('duration', 30)))
-            with db_connect() as conn: conn.execute('INSERT INTO auth_codes (code, duration, is_used, bound_user) VALUES (?, ?, 0, "")', (code, int(data.get('duration', 30)))); conn.commit()
+            ticket = str(data.get('queue_ticket', ''))
+            position = queue_position(ticket)
+            if position != 0: return self.send_resp(409, {'msg': '尚未轮到当前请求', 'position': max(position, 0)})
+            queue_release(ticket)
+            try: route_limit = int(data.get('route_limit', 3))
+            except (TypeError, ValueError): return self.send_resp(400, {'msg': '线路额度必须是整数'})
+            if route_limit < 1 or route_limit > 1000: return self.send_resp(400, {'msg': '线路额度范围为 1-1000'})
+            code = generate_auth_code(route_limit)
+            with db_connect() as conn: conn.execute('INSERT INTO auth_codes (code, duration, is_used, bound_user, route_limit) VALUES (?, ?, 0, "", ?)', (code, route_limit, route_limit)); conn.commit()
             return self.send_resp(200, {'msg': '生成成功', 'code': code})
         elif self.path == '/admin/add_node':
-            with db_connect() as conn: conn.execute('INSERT INTO nodes (name, host, port, secret_key, is_online) VALUES (?, ?, ?, ?, 0)', (data.get('name'), data.get('host'), data.get('port'), data.get('key'))); conn.commit()
+            public_port = str(data.get('public_port') or '').strip()
+            if not public_port.isdigit() or not (1 <= int(public_port) <= 65535): return self.send_resp(400, {'msg': '公网服务端口必须是 1-65535 的数字'})
+            with db_connect() as conn: conn.execute('INSERT INTO nodes (name, host, port, secret_key, is_online, public_port) VALUES (?, ?, ?, ?, 0, ?)', (data.get('name'), data.get('host'), data.get('port'), data.get('key'), public_port)); conn.commit()
             return self.send_resp(200, {'msg': '节点接入成功'})
         elif self.path == '/admin/delete_node':
             nid = data.get('id')
@@ -432,6 +512,11 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             return self.send_resp(200, {'msg': '公告已发布生效'})
 
     def do_GET(self):
+        if self.path.startswith('/queue/status'):
+            query = parse_qs(urlsplit(self.path).query)
+            ticket = str(query.get('ticket', [''])[0])
+            position = queue_position(ticket)
+            return self.send_resp(200, {'position': position, 'ready': position == 0})
         session = self.get_user()
         if not session: return self.send_resp(401, {'msg': 'Unauthorized'})
         
@@ -443,7 +528,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             if self.path == '/user/data' and session['role'] == 'user':
                 user_row = conn.execute('SELECT expire_time, route_limit FROM users WHERE username=?', (session['username'],)).fetchone()
                 exp, route_limit = user_row[0], user_row[1]
-                routes = conn.execute('SELECT r.id, r.subdomain, r.target, n.name, n.port, n.host, n.id FROM routes r JOIN nodes n ON r.node_id = n.id WHERE r.username=?', (session['username'],)).fetchall()
+                routes = conn.execute('SELECT r.id, r.subdomain, r.target, n.name, COALESCE(n.public_port,n.port), n.host, n.id FROM routes r JOIN nodes n ON r.node_id = n.id WHERE r.username=?', (session['username'],)).fetchall()
                 nodes_data = conn.execute('SELECT id, name, host, port, is_online FROM nodes').fetchall()
                 
                 return self.send_resp(200, {
@@ -459,8 +544,8 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 })
             
             if self.path == '/admin/data' and session['role'] == 'admin':
-                codes = conn.execute('SELECT code, duration, is_used, bound_user FROM auth_codes ORDER BY is_used ASC').fetchall()
-                nodes_full = conn.execute('SELECT id, name, host, port, is_online FROM nodes').fetchall()
+                codes = conn.execute('SELECT code, route_limit, is_used, bound_user FROM auth_codes ORDER BY is_used ASC').fetchall()
+                nodes_full = conn.execute('SELECT id, name, host, port, is_online, public_port FROM nodes').fetchall()
                 routes = conn.execute('SELECT r.id, r.username, r.subdomain, r.target, n.name, n.id FROM routes r JOIN nodes n ON r.node_id = n.id').fetchall()
                 users = conn.execute('SELECT u.username, u.expire_time, u.route_limit, COUNT(r.id) FROM users u LEFT JOIN routes r ON r.username=u.username GROUP BY u.username, u.expire_time, u.route_limit ORDER BY u.username').fetchall()
                 return self.send_resp(200, {
@@ -468,7 +553,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                     'panel_name': PANEL_NAME,
                     'panel_domain': PANEL_DOMAIN,
                     'codes': [{'code': c[0], 'dur': c[1], 'used': c[2], 'user': c[3]} for c in codes],
-                    'nodes': [{'id': n[0], 'name': n[1], 'host': n[2], 'port': n[3], 'online': n[4]} for n in nodes_full],
+                    'nodes': [{'id': n[0], 'name': n[1], 'host': n[2], 'port': n[3], 'public_port': n[5] or n[3], 'online': n[4]} for n in nodes_full],
                     'routes': [{'id': r[0], 'user': r[1], 'subdomain': r[2], 'target': r[3], 'node_name': r[4], 'node_id': r[5]} for r in routes],
                     'users': [{'username': u[0], 'expire': time.strftime("%Y-%m-%d", time.localtime(u[1])), 'route_limit': u[2], 'route_count': u[3]} for u in users],
                     'announcement': ann_text

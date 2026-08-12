@@ -66,6 +66,7 @@ show_menu() {
     printf '6. 面板名称: %s\n' "$PANEL_NAME"
     printf '7. 面板访问域名（可选）: %s\n' "${PANEL_DOMAIN:-未设置，将使用 IP}"
     printf '8. 开始安装\n'
+    printf '9. 查看主控服务状态\n'
     printf '0. 退出\n'
 }
 
@@ -86,7 +87,7 @@ show_missing_required() {
 if [ -t 0 ]; then
     while :; do
         show_menu
-        printf '请选择 [0-8]: '
+        printf '请选择 [0-9]: '
         IFS= read -r choice
         case "$choice" in
             1) PANEL_PASSWORD=$(prompt_secret '请输入面板管理员密码' "$PANEL_PASSWORD") ;;
@@ -97,6 +98,14 @@ if [ -t 0 ]; then
             6) PANEL_NAME=$(prompt_value '请输入面板名称' "$PANEL_NAME") ;;
             7) PANEL_DOMAIN=$(prompt_value '请输入面板域名（可留空使用 IP）' "$PANEL_DOMAIN") ;;
             8) show_missing_required && break ;;
+            9)
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl --no-pager --full status emby-panel 2>/dev/null || true
+                    systemctl --no-pager --full status nginx 2>/dev/null || true
+                else
+                    echo '当前系统未检测到 systemd 主控服务。'
+                fi
+                ;;
             0) exit 0 ;;
             *) echo '无效选项。' ;;
         esac

@@ -55,7 +55,8 @@ if [ -t 0 ]; then
         printf '\n=== Emby Edge Worker HTTPS 安装配置 ===\n'
         printf '1. 主控公网 IP: %s\n' "${MASTER_IP:-未设置}"
         printf '2. 节点共享密钥: %s\n' "$(is_set "$SECRET_KEY")"
-        printf '3. 开始安装（基础域名和 HTTPS 证书由主控自动下发）\n0. 退出\n请选择 [0-3]: '
+        printf '3. 开始安装（基础域名和 HTTPS 证书由主控自动下发）\n'
+        printf '4. 查看 Worker 服务状态\n0. 退出\n请选择 [0-4]: '
         IFS= read -r choice
         case "$choice" in
             1) MASTER_IP=$(prompt_value '请输入主控公网 IP' "$MASTER_IP") ;;
@@ -65,6 +66,15 @@ if [ -t 0 ]; then
                     echo '仍有必填配置未设置。'
                 else
                     break
+                fi
+                ;;
+            4)
+                if command -v rc-service >/dev/null 2>&1; then
+                    rc-service nginx status 2>/dev/null || true
+                    rc-service emby-agent status 2>/dev/null || true
+                    netstat -lnt 2>/dev/null | grep -E ':(12345|8081)[[:space:]]' || true
+                else
+                    echo '当前系统未检测到 OpenRC Worker 服务。'
                 fi
                 ;;
             0) exit 0 ;;
@@ -266,4 +276,4 @@ rc-service emby-agent status
 echo "Worker HTTPS 安装完成。"
 echo "内部服务端口: 12345（HTTP/HTTPS 自动分流）"
 echo "证书由主控统一签发和更新。"
-echo "NAT 节点仍需把公网服务端口映射到内部 12345。"
+echo "NAT 节点请把服务商分配的任意公网端口映射到内部 12345，并在主控节点配置中填写该实际公网端口。"

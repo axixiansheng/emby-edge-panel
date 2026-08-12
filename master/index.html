@@ -243,7 +243,7 @@
                 <h3>选择承载节点</h3>
                 <div id="u-nodes" class="node-grid"></div>
                 <div class="input-group">
-                    <input type="text" id="u-sub" placeholder="设置子域名 (例如: play1)">
+                    <input type="text" id="u-sub" placeholder="线路缩写（例如“哇哇叫”填写首字母 wwj）">
                     <input type="text" id="u-target" placeholder="目标源站 (支持 http/https/IP)">
                     <button onclick="addRoute()">一键部署</button>
                 </div>
@@ -284,7 +284,8 @@
                         <input type="text" id="n-host" placeholder="节点通信 IP / 域名">
                     </div>
                     <div class="input-group" style="margin-top:0;">
-                        <input type="text" id="n-port" placeholder="Agent 端口">
+                        <input type="text" id="n-port" placeholder="Worker 通信公网端口（主控 API 心跳/同步）">
+                        <input type="text" id="n-public-port" placeholder="线路公网端口（NAT 服务端口映射）">
                         <input type="password" id="n-key" placeholder="安全通信密钥">
                     </div>
                     <button onclick="addNode()" style="width:100%; margin-bottom:16px;">推送配置并接入集群</button>
@@ -293,12 +294,12 @@
                 <div class="card" style="flex: 1;">
                     <h3>授权码签发中心</h3>
                     <div class="input-group" style="margin-top: 8px;">
-                        <input type="number" id="a-dur" value="30" placeholder="有效期(天)">
+                        <input type="number" id="a-dur" value="3" min="1" max="1000" placeholder="注册用户线路额度">
                         <button onclick="genAuthCode()">生成凭证</button>
                     </div>
                     <div class="table-responsive" style="max-height: 150px; overflow-y: auto;">
                         <table style="margin-top:8px;">
-                            <thead><tr><th>Code (邀请码)</th><th>状态</th><th>属主</th></tr></thead>
+                            <thead><tr><th>Code (邀请码)</th><th>线路额度</th><th>状态</th><th>属主</th></tr></thead>
                             <tbody id="a-codes"></tbody>
                         </table>
                     </div>
@@ -408,8 +409,20 @@
             } catch(e) { toast(e.message); throw e; }
         }
 
+        async function waitForQueue(label='请求') {
+            const joined = await fetchAPI('/queue/join', 'POST', {});
+            while(true) {
+                const state = await fetchAPI('/queue/status?ticket=' + encodeURIComponent(joined.ticket));
+                if(state.ready) return joined.ticket;
+                toast(`${label}正在排队，前方 ${Math.max(state.position, 0)} 人`);
+                await new Promise(resolve => setTimeout(resolve, 900));
+            }
+        }
+
         async function login() {
-            const data = await fetchAPI('/login', 'POST', { username: document.getElementById('l-user').value, password: document.getElementById('l-pwd').value, code: document.getElementById('l-code').value });
+            const code = document.getElementById('l-code').value;
+            const queue_ticket = code ? await waitForQueue('注册') : '';
+            const data = await fetchAPI('/login', 'POST', { username: document.getElementById('l-user').value, password: document.getElementById('l-pwd').value, code, queue_ticket });
             sessionStorage.setItem('token', token = data.token);
             sessionStorage.setItem('role', role = data.role);
             initApp();
@@ -505,9 +518,9 @@
             applyBrand(data);
             document.getElementById('a-ann-input').value = data.announcement || "";
             nodesCache = data.nodes;
-            document.getElementById('a-codes').innerHTML = data.codes.map(c => `<tr><td style="font-family:monospace; font-size:13px;">${c.code}</td><td>${c.used?'<span class="badge offline">已绑定</span>':'<span class="badge online">可使用</span>'}</td><td style="color:var(--text-light);">${c.user||'-'}</td></tr>`).join('');
-            document.getElementById('a-nodes').innerHTML = nodesCache.map(n => `<tr><td>${n.id}</td><td style="font-weight:500;">${n.name}</td><td style="font-family:monospace; color:var(--text-light);">${n.host+':'+n.port}</td><td>${n.online?'<span class="status-dot dot-green"></span>在线':'<span class="status-dot dot-red"></span>离线'}</td><td><button class="danger" style="padding:4px 10px; font-size:12px; border-radius:6px;" onclick="delNode(${n.id})">强踢</button></td></tr>`).join('');
-            document.getElementById('a-routes').innerHTML = data.routes.map(r => `<tr><td style="font-weight:500;">${r.user}</td><td><span class="badge">${r.node_name}</span></td><td style="font-family:monospace;">${r.subdomain}</td><td style="color:var(--text-light);">${r.target}</td><td><button class="outline" style="padding:4px 10px; font-size:12px; border-radius:6px;" onclick="openModal(${r.id}, ${r.node_id}, '${r.target}')">越权改</button> <button class="danger" style="padding:4px 10px; font-size:12px; border-radius:6px; margin-left:4px;" onclick="delRoute(${r.id})">封禁</button></td></tr>`).join('');
+            document.getElementById('a-codes').innerHTML = data.codes.map(c => `<tr><td style="font-family:monospace; font-size:13px;">${c.code}</td><td>${Number(c.dur)}</td><td>${c.used?'<span class="badge offline">已绑定</span>':'<span class="badge online">可使用</span>'}</td><td style="color:var(--text-light);">${c.user||'-'}</td></tr>`).join('');
+            document.getElementById('a-nodes').innerHTML = nodesCache.map(n => `<tr><td>${n.id}</td><td style="font-weight:500;">${n.name}</td><td style="font-family:monospace; color:var(--text-light);">${n.host+':'+n.port}</td><td>${n.online?'<span class="status-dot dot-green"></span>在线':'<span class="status-dot dot-red"></span>离线'}</td><td><button class="danger" style="padding:4px 10px; font-size:12px; border-radius:6px;" onclick="delNode(${n.id})">下线</button></td></tr>`).join('');
+            document.getElementById('a-routes').innerHTML = data.routes.map(r => `<tr><td style="font-weight:500;">${r.user}</td><td><span class="badge">${r.node_name}</span></td><td style="font-family:monospace;">${r.subdomain}</td><td style="color:var(--text-light);">${r.target}</td><td><button class="outline" style="padding:4px 10px; font-size:12px; border-radius:6px;" onclick="openModal(${r.id}, ${r.node_id}, '${r.target}')">越权改</button> <button class="danger" style="padding:4px 10px; font-size:12px; border-radius:6px; margin-left:4px;" onclick="delRoute(${r.id})">删除</button></td></tr>`).join('');
             document.getElementById('a-users').innerHTML = (data.users || []).map(u => `<tr><td style="font-weight:500;">${escapeHtml(u.username)}</td><td>${escapeHtml(u.expire)}</td><td>${Number(u.route_count)}</td><td><input id="limit-${encodeURIComponent(u.username)}" type="number" min="0" max="1000" value="${Number(u.route_limit)}" style="width:90px; margin:0;"></td><td><button class="outline" style="padding:4px 10px; font-size:12px; border-radius:6px;" onclick="updateUserLimit('${escapeJs(u.username)}')">保存额度</button></td></tr>`).join('');
         }
         
@@ -519,8 +532,9 @@
 
         async function addRoute() {
             if(!selectedNode) return toast("请先选择一个节点");
-            await fetchAPI('/user/add_route', 'POST', { node_id: selectedNode, subdomain: document.getElementById('u-sub').value, target: document.getElementById('u-target').value });
-            toast("部署成功"); loadUser();
+            const queue_ticket = await waitForQueue('线路部署');
+            const result = await fetchAPI('/user/add_route', 'POST', { node_id: selectedNode, subdomain: document.getElementById('u-sub').value, target: document.getElementById('u-target').value, queue_ticket });
+            toast(`部署成功：${result.subdomain}${BASE_DOMAIN}`); loadUser(); return;
         }
         async function delRoute(id) {
             if(!confirm("⚠️ 确认销毁此网络链路? 此操作将从 CF 边缘网络同步抹除。")) return;
@@ -546,9 +560,9 @@
             isAdmin ? loadAdmin() : loadUser();
         }
 
-        async function addNode() { await fetchAPI('/admin/add_node', 'POST', {name: document.getElementById('n-name').value, host: document.getElementById('n-host').value, port: document.getElementById('n-port').value, key: document.getElementById('n-key').value}); toast("节点握手接入成功"); loadAdmin(); }
+        async function addNode() { await fetchAPI('/admin/add_node', 'POST', {name: document.getElementById('n-name').value, host: document.getElementById('n-host').value, port: document.getElementById('n-port').value, public_port: document.getElementById('n-public-port').value, key: document.getElementById('n-key').value}); toast("节点握手接入成功"); loadAdmin(); }
         async function delNode(id) { if(confirm("确认将此节点从分布式集群中移除?")) { await fetchAPI('/admin/delete_node', 'POST', {id}); toast("节点已踢出集群"); loadAdmin(); } }
-        async function genAuthCode() { await fetchAPI('/admin/generate', 'POST', {duration: document.getElementById('a-dur').value}); loadAdmin(); }
+        async function genAuthCode() { const queue_ticket = await waitForQueue('授权码签发'); await fetchAPI('/admin/generate', 'POST', {route_limit: document.getElementById('a-dur').value, queue_ticket}); loadAdmin(); }
         async function updateUserLimit(username) {
             const input = document.getElementById('limit-' + encodeURIComponent(username));
             await fetchAPI('/admin/update_user_limit', 'POST', {username, route_limit: input.value});
