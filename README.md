@@ -23,8 +23,7 @@ An open-source Emby reverse-proxy control panel with one master and multiple sig
 ```sh
 rm -rf emby-edge-panel
 mkdir emby-edge-panel
-curl -fsSL https://github.com/axixiansheng/emby-edge-panel/archive/refs/heads/main.tar.gz \
-  | tar -xz --strip-components=1 -C emby-edge-panel
+curl -fsSL https://github.com/axixiansheng/emby-edge-panel/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1 -C emby-edge-panel
 cd emby-edge-panel
 ```
 
