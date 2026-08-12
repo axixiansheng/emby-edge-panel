@@ -1,10 +1,28 @@
 #!/bin/sh
 set -eu
 
-# Before running, set the shared key:
-# export SECRET_KEY='replace-with-the-key-configured-for-this-node-in-master'
-: "${SECRET_KEY:?SECRET_KEY must be set}"
-: "${MASTER_IP:?MASTER_IP must be set}"
+SECRET_KEY=${SECRET_KEY:-}
+MASTER_IP=${MASTER_IP:-}
+
+if [ -t 0 ]; then
+    while :; do
+        printf '\n=== Emby Edge Worker 安装配置 ===\n'
+        printf '1. 主控公网 IP: %s\n' "${MASTER_IP:-未设置}"
+        printf '2. 节点共享密钥: %s\n' "$([ -n "$SECRET_KEY" ] && echo 已设置 || echo 未设置)"
+        printf '3. 开始安装\n0. 退出\n请选择 [0-3]: '
+        IFS= read -r choice
+        case "$choice" in
+            1) printf '请输入主控公网 IP [%s]: ' "$MASTER_IP"; IFS= read -r value; [ -z "$value" ] || MASTER_IP=$value ;;
+            2) printf '请输入节点共享密钥 [直接回车保留]: '; stty -echo 2>/dev/null || true; IFS= read -r value; stty echo 2>/dev/null || true; printf '\n'; [ -z "$value" ] || SECRET_KEY=$value ;;
+            3) [ -n "$MASTER_IP" ] && [ -n "$SECRET_KEY" ] && break || echo '仍有必填配置未设置。' ;;
+            0) exit 0 ;;
+            *) echo '无效选项。' ;;
+        esac
+    done
+else
+    : "${SECRET_KEY:?SECRET_KEY must be set in non-interactive mode}"
+    : "${MASTER_IP:?MASTER_IP must be set in non-interactive mode}"
+fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 AGENT_SOURCE="$SCRIPT_DIR/worker/agent.py"

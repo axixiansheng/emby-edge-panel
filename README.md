@@ -18,45 +18,60 @@ An open-source Emby reverse-proxy control panel with one master and multiple sig
 - Worker: Alpine Linux, Nginx on internal port `12345`, Agent on `127.0.0.1:8081`
 - NAT Worker: map a public service port such as `54321` to internal port `12345`; enter `54321` in the panel
 
-## Install Master
+## Download
 
 ```sh
-git clone https://github.com/axixiansheng/emby-edge-panel.git
+rm -rf emby-edge-panel
+mkdir emby-edge-panel
+curl -fsSL https://github.com/axixiansheng/emby-edge-panel/archive/refs/heads/main.tar.gz \
+  | tar -xz --strip-components=1 -C emby-edge-panel
 cd emby-edge-panel
+```
+
+This produces `emby-edge-panel`, not `emby-edge-panel-main`.
+
+## Interactive Master Install
+
+```sh
+sudo ./install-master.sh
+```
+
+The menu lets you enter or modify:
+
+- panel administrator password
+- Cloudflare API Token
+- Cloudflare Zone ID
+- base domain
+- Worker shared secret
+- panel name
+
+Existing environment variables are used as defaults. Non-interactive automation remains supported:
+
+```sh
 export PANEL_PASSWORD='choose-a-strong-password'
 export CF_API_TOKEN='cloudflare-api-token'
 export CF_ZONE_ID='cloudflare-zone-id'
 export BASE_DOMAIN='example.com'
 export GLOBAL_SECRET_KEY='long-random-shared-secret'
 export PANEL_NAME='My Emby Edge'
-sudo -E ./install-master.sh
+sudo -E ./install-master.sh </dev/null
 ```
 
-## Install Worker
+## Interactive Worker Install
 
 ```sh
-git clone https://github.com/axixiansheng/emby-edge-panel.git
-cd emby-edge-panel
-export MASTER_IP='master-public-ip'
-export SECRET_KEY='this-node-shared-secret'
-sudo -E ./install-worker.sh
+sudo ./install-worker.sh
 ```
 
-Use the same Worker `SECRET_KEY` when adding that node in the master panel.
+Enter the master public IP and this Worker's shared secret in the menu. Use the same Worker secret when adding that node in the master panel.
 
-## Public One-Command Download
-
-Master, after exporting the required variables:
+## Uninstall
 
 ```sh
-curl -fsSL https://github.com/axixiansheng/emby-edge-panel/archive/refs/heads/main.tar.gz | tar -xz && cd emby-edge-panel-main && sudo -E ./install-master.sh
+sudo ./uninstall.sh
 ```
 
-Worker, after exporting `MASTER_IP` and `SECRET_KEY`:
-
-```sh
-curl -fsSL https://github.com/axixiansheng/emby-edge-panel/archive/refs/heads/main.tar.gz | tar -xz && cd emby-edge-panel-main && sudo -E ./install-worker.sh
-```
+The uninstaller menu can remove the master, Worker, both, or timestamped project backups. It can preserve the master database in a timestamped directory under `/root`. System packages such as Nginx and Python are not removed.
 
 ## NAT Workers
 
@@ -67,6 +82,8 @@ SSH mapping ports are unrelated to Worker service ports.
 ## Updating
 
 Pull or download the latest source and run the relevant installer again. Installers back up existing application and Nginx directories before replacement. The master installer preserves an existing `panel.db`.
+
+The master installer disables known legacy links named `default`, `emby-panel-http`, and `emby-panel` before enabling the current site. Other Nginx websites are preserved. If another website is already configured as `default_server` on port 80, remove `default_server` from one of the sites or choose which site should own the default port.
 
 ## Security
 
