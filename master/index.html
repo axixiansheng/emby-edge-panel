@@ -485,8 +485,8 @@
                 <tr>
                     <td><span class="badge ${nodesCache.find(n=>n.id===r.node_id)?.online===1?'online':'offline'}">${escapeHtml(r.node_name)}</span></td>
                     <td>
-                        <span class="copyable" onclick="copyText('http://${r.subdomain}${BASE_DOMAIN}:${r.node_port}')" title="点击一键复制">
-                            http://${escapeHtml(r.subdomain)}${BASE_DOMAIN}:${Number(r.node_port)}
+                        <span class="copyable" onclick="copyText('https://${r.subdomain}${BASE_DOMAIN}:${r.node_port}')" title="点击一键复制">
+                            https://${escapeHtml(r.subdomain)}${BASE_DOMAIN}:${Number(r.node_port)}
                         </span>
                     </td>
                     <td style="color:var(--text-light); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.target)}</td>

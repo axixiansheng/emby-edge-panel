@@ -37,7 +37,9 @@ remove_worker() {
     fi
     rm -f /etc/init.d/emby-agent
     rm -rf /opt/emby_agent
-    rm -f /etc/nginx/http.d/default.conf /etc/nginx/emby_url.map /etc/nginx/emby_sni.map
+    rm -f /etc/nginx/http.d/default.conf /etc/nginx/stream.d/emby.conf /etc/nginx/conf.d/emby-stream.conf
+    rm -f /etc/nginx/emby_url.map /etc/nginx/emby_sni.map /etc/periodic/daily/emby-cert-renew
+    rm -f /root/.secrets/emby-cloudflare.ini
     nginx -t 2>/dev/null && { rc-service nginx restart 2>/dev/null || true; }
 }
 

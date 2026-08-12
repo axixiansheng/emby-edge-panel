@@ -1,20 +1,86 @@
 #!/bin/sh
 set -eu
 
-SECRET_KEY=${SECRET_KEY:-}
-MASTER_IP=${MASTER_IP:-}
+WORKER_ENV=/opt/emby_agent/.env
+CF_CREDENTIALS=/root/.secrets/emby-cloudflare.ini
+
+read_existing_value() {
+    key=$1
+    [ -f "$WORKER_ENV" ] || return 0
+    awk -v wanted="$key" '
+        index($0, wanted "=") == 1 {
+            value = substr($0, length(wanted) + 2)
+            sub(/^[[:space:]]+/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            if ((substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"") ||
+                (substr(value, 1, 1) == "\047" && substr(value, length(value), 1) == "\047")) {
+                value = substr(value, 2, length(value) - 2)
+            }
+            print value
+            exit
+        }
+    ' "$WORKER_ENV"
+}
+
+read_existing_cf_token() {
+    [ -f "$CF_CREDENTIALS" ] || return 0
+    sed -n 's/^dns_cloudflare_api_token[[:space:]]*=[[:space:]]*//p' "$CF_CREDENTIALS" | head -n 1
+}
+
+is_set() { [ -n "$1" ] && printf '已设置' || printf '未设置'; }
+prompt_value() {
+    label=$1
+    current=$2
+    printf '%s' "$label" >&2
+    [ -z "$current" ] || printf ' [%s]' "$current" >&2
+    printf ': ' >&2
+    IFS= read -r answer
+    [ -z "$answer" ] && answer=$current
+    printf '%s' "$answer"
+}
+prompt_secret() {
+    label=$1
+    current=$2
+    printf '%s' "$label" >&2
+    [ -z "$current" ] || printf ' [直接回车保留当前值]' >&2
+    printf ': ' >&2
+    stty -echo 2>/dev/null || true
+    IFS= read -r answer
+    stty echo 2>/dev/null || true
+    printf '\n' >&2
+    [ -z "$answer" ] && answer=$current
+    printf '%s' "$answer"
+}
+
+SECRET_KEY=${SECRET_KEY:-$(read_existing_value SECRET_KEY)}
+MASTER_IP=${MASTER_IP:-$(read_existing_value MASTER_IP)}
+BASE_DOMAIN=${BASE_DOMAIN:-$(read_existing_value BASE_DOMAIN)}
+CF_API_TOKEN=${CF_API_TOKEN:-$(read_existing_cf_token)}
+NODE_ID=${NODE_ID:-$(read_existing_value NODE_ID)}
 
 if [ -t 0 ]; then
     while :; do
-        printf '\n=== Emby Edge Worker 安装配置 ===\n'
+        printf '\n=== Emby Edge Worker HTTPS 安装配置 ===\n'
         printf '1. 主控公网 IP: %s\n' "${MASTER_IP:-未设置}"
-        printf '2. 节点共享密钥: %s\n' "$([ -n "$SECRET_KEY" ] && echo 已设置 || echo 未设置)"
-        printf '3. 开始安装\n0. 退出\n请选择 [0-3]: '
+        printf '2. 节点共享密钥: %s\n' "$(is_set "$SECRET_KEY")"
+        printf '3. 基础域名: %s\n' "${BASE_DOMAIN:-未设置}"
+        printf '4. Cloudflare API Token: %s\n' "$(is_set "$CF_API_TOKEN")"
+        printf '5. 节点证书标识: %s\n' "${NODE_ID:-自动生成}"
+        printf '6. 开始安装\n0. 退出\n请选择 [0-6]: '
         IFS= read -r choice
         case "$choice" in
-            1) printf '请输入主控公网 IP [%s]: ' "$MASTER_IP"; IFS= read -r value; [ -z "$value" ] || MASTER_IP=$value ;;
-            2) printf '请输入节点共享密钥 [直接回车保留]: '; stty -echo 2>/dev/null || true; IFS= read -r value; stty echo 2>/dev/null || true; printf '\n'; [ -z "$value" ] || SECRET_KEY=$value ;;
-            3) [ -n "$MASTER_IP" ] && [ -n "$SECRET_KEY" ] && break || echo '仍有必填配置未设置。' ;;
+            1) MASTER_IP=$(prompt_value '请输入主控公网 IP' "$MASTER_IP") ;;
+            2) SECRET_KEY=$(prompt_secret '请输入节点共享密钥' "$SECRET_KEY") ;;
+            3) BASE_DOMAIN=$(prompt_value '请输入基础域名（不含协议，例如 example.com）' "$BASE_DOMAIN") ;;
+            4) CF_API_TOKEN=$(prompt_secret '请输入具备该 Zone DNS 编辑权限的 Cloudflare API Token' "$CF_API_TOKEN") ;;
+            5) NODE_ID=$(prompt_value '请输入节点证书标识（留空自动生成）' "$NODE_ID") ;;
+            6)
+                if [ -z "$MASTER_IP" ] || [ -z "$SECRET_KEY" ] || [ -z "$BASE_DOMAIN" ] || [ -z "$CF_API_TOKEN" ]; then
+                    echo '仍有必填配置未设置。'
+                else
+                    break
+                fi
+                ;;
             0) exit 0 ;;
             *) echo '无效选项。' ;;
         esac
@@ -22,51 +88,86 @@ if [ -t 0 ]; then
 else
     : "${SECRET_KEY:?SECRET_KEY must be set in non-interactive mode}"
     : "${MASTER_IP:?MASTER_IP must be set in non-interactive mode}"
+    : "${BASE_DOMAIN:?BASE_DOMAIN must be set in non-interactive mode}"
+    : "${CF_API_TOKEN:?CF_API_TOKEN must be set in non-interactive mode}"
 fi
+
+BASE_DOMAIN=$(printf '%s' "$BASE_DOMAIN" | sed 's#^[[:space:]]*https\?://##; s#/.*$##; s/^\.//; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')
+case "$BASE_DOMAIN" in
+    ''|*[!a-z0-9.-]*|.*|*..*|*.) echo '基础域名格式无效。' >&2; exit 1 ;;
+esac
+case "$MASTER_IP" in
+    ''|*[!0-9a-fA-F:.]*) echo '主控公网 IP 格式无效。' >&2; exit 1 ;;
+esac
+
+if [ -z "$NODE_ID" ]; then
+    host_part=$(hostname 2>/dev/null | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9-]/-/g; s/^-*//; s/-*$//' | cut -c1-24)
+    random_part=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+    NODE_ID="${host_part:-worker}-$random_part"
+else
+    NODE_ID=$(printf '%s' "$NODE_ID" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9-]/-/g; s/^-*//; s/-*$//' | cut -c1-40)
+fi
+[ -n "$NODE_ID" ] || { echo '节点证书标识无效。' >&2; exit 1; }
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 AGENT_SOURCE="$SCRIPT_DIR/worker/agent.py"
-if [ ! -f "$AGENT_SOURCE" ]; then
-    echo "Missing $AGENT_SOURCE. Upload both files into the same directory." >&2
-    exit 1
-fi
+[ -f "$AGENT_SOURCE" ] || { echo "Missing $AGENT_SOURCE" >&2; exit 1; }
 
 apk update
-apk add nginx python3 chrony
+apk add nginx nginx-mod-stream python3 chrony certbot certbot-dns-cloudflare
 
-mkdir -p /opt/emby_agent /etc/nginx/http.d
+stamp=$(date +%Y%m%d-%H%M%S)
+[ ! -d /opt/emby_agent ] || cp -a /opt/emby_agent "/opt/emby_agent.backup-$stamp"
+cp -a /etc/nginx "/etc/nginx.backup-emby-worker-$stamp"
+
+mkdir -p /opt/emby_agent /etc/nginx/http.d /etc/nginx/stream.d /root/.secrets
 cp "$AGENT_SOURCE" /opt/emby_agent/agent.py
 chmod 750 /opt/emby_agent/agent.py
 touch /etc/nginx/emby_url.map /etc/nginx/emby_sni.map
 chmod 640 /etc/nginx/emby_url.map /etc/nginx/emby_sni.map
 
-cat > /etc/nginx/http.d/default.conf <<'EOF'
-map $host $target_url {
+cat > "$CF_CREDENTIALS" <<EOF
+dns_cloudflare_api_token=$CF_API_TOKEN
+EOF
+chmod 600 "$CF_CREDENTIALS"
+
+CERT_NAME="emby-worker-$NODE_ID"
+CERT_HOST="$NODE_ID.$BASE_DOMAIN"
+certbot certonly \
+    --dns-cloudflare \
+    --dns-cloudflare-credentials "$CF_CREDENTIALS" \
+    --dns-cloudflare-propagation-seconds 30 \
+    --non-interactive --agree-tos --register-unsafely-without-email \
+    --cert-name "$CERT_NAME" \
+    -d "*.$BASE_DOMAIN" -d "$CERT_HOST"
+
+cat > /etc/nginx/http.d/default.conf <<EOF
+map \$host \$target_url {
     default "";
     include /etc/nginx/emby_url.map;
 }
-
-map $host $target_sni {
+map \$host \$target_sni {
     default "";
     include /etc/nginx/emby_sni.map;
 }
 
 server {
-    listen 12345;
-    listen [::]:12345;
+    listen 127.0.0.1:12346 proxy_protocol;
     server_name _;
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
     resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
 
     location /api/ {
-        allow __MASTER_IP__;
+        allow $MASTER_IP;
         deny all;
         proxy_pass http://127.0.0.1:8081;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
     }
 
     location / {
-        if ($target_url = "") { return 404 "Edge Node Target Not Found"; }
+        if (\$target_url = "") { return 404 "Edge Node Target Not Found"; }
         proxy_buffering off;
         proxy_request_buffering off;
         proxy_max_temp_file_size 0;
@@ -74,27 +175,81 @@ server {
         proxy_connect_timeout 60s;
         proxy_send_timeout 3600s;
         proxy_read_timeout 3600s;
-        proxy_set_header Host $target_sni;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host \$target_sni;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto "http";
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header Range \$http_range;
+        proxy_set_header If-Range \$http_if_range;
+        proxy_ssl_server_name on;
+        proxy_ssl_name \$target_sni;
+        proxy_pass \$target_url\$request_uri;
+    }
+}
+
+server {
+    listen 127.0.0.1:12347 ssl proxy_protocol;
+    server_name *.$BASE_DOMAIN;
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
+    ssl_certificate /etc/letsencrypt/live/$CERT_NAME/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$CERT_NAME/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
+
+    location / {
+        if (\$target_url = "") { return 404 "Edge Node Target Not Found"; }
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        proxy_force_ranges on;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
+        proxy_set_header Host \$target_sni;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto "https";
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Range $http_range;
-        proxy_set_header If-Range $http_if_range;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header Range \$http_range;
+        proxy_set_header If-Range \$http_if_range;
         proxy_ssl_server_name on;
-        proxy_ssl_name $target_sni;
-        proxy_pass $target_url$request_uri;
+        proxy_ssl_name \$target_sni;
+        proxy_pass \$target_url\$request_uri;
     }
 }
 EOF
-sed -i "s/__MASTER_IP__/$MASTER_IP/g" /etc/nginx/http.d/default.conf
 
-cat > /opt/emby_agent/.env <<EOF
-SECRET_KEY="$SECRET_KEY"
+rm -f /etc/nginx/conf.d/emby-stream.conf
+cat > /etc/nginx/stream.d/emby.conf <<'EOF'
+map $ssl_preread_protocol $emby_backend {
+    ""      127.0.0.1:12346;
+    default 127.0.0.1:12347;
+}
+server {
+    listen 12345;
+    listen [::]:12345;
+    proxy_pass $emby_backend;
+    proxy_protocol on;
+    ssl_preread on;
+    proxy_connect_timeout 10s;
+    proxy_timeout 3600s;
+}
 EOF
-chmod 600 /opt/emby_agent/.env
+
+cat > "$WORKER_ENV" <<EOF
+SECRET_KEY="$SECRET_KEY"
+MASTER_IP="$MASTER_IP"
+BASE_DOMAIN="$BASE_DOMAIN"
+NODE_ID="$NODE_ID"
+CERT_NAME="$CERT_NAME"
+EOF
+chmod 600 "$WORKER_ENV"
 
 cat > /etc/init.d/emby-agent <<'EOF'
 #!/sbin/openrc-run
@@ -106,21 +261,23 @@ command_background=true
 pidfile="/run/emby-agent.pid"
 output_log="/var/log/emby-agent.log"
 error_log="/var/log/emby-agent.err"
-depend() {
-    need net
-    after nginx
-}
+depend() { need net; after nginx; }
 EOF
 chmod +x /etc/init.d/emby-agent
 
+mkdir -p /etc/periodic/daily
+cat > /etc/periodic/daily/emby-cert-renew <<'EOF'
+#!/bin/sh
+certbot renew --quiet --deploy-hook 'nginx -s reload'
+EOF
+chmod 700 /etc/periodic/daily/emby-cert-renew
+
 rc-update add nginx default
 rc-update add emby-agent default
+rc-update add crond default >/dev/null 2>&1 || true
 python3 -m py_compile /opt/emby_agent/agent.py
 nginx -t
 
-# Container/NAT providers often remove CAP_SYS_TIME. In that environment
-# chronyd fails with "adjtimex ... Operation not permitted" even for root.
-# Time synchronization is useful but must not prevent the Worker from starting.
 if rc-service chronyd restart 2>/tmp/emby-chrony-error.log; then
     rc-update add chronyd default >/dev/null 2>&1 || true
     echo 'Chrony 已启动，系统时间会自动同步。'
@@ -128,16 +285,18 @@ else
     rc-service chronyd stop >/dev/null 2>&1 || true
     rc-update del chronyd default >/dev/null 2>&1 || true
     echo '警告：当前虚拟化环境不允许 Chrony 调整系统时间，已跳过。' >&2
-    if grep -q 'Operation not permitted' /tmp/emby-chrony-error.log 2>/dev/null; then
-        echo '这是 NAT/LXC/OpenVZ 容器缺少 CAP_SYS_TIME 的常见限制。' >&2
-    fi
     echo 'Worker 仍会继续安装，但节点 UTC 时间必须由宿主机保持准确（误差不超过 60 秒）。' >&2
 fi
 rm -f /tmp/emby-chrony-error.log
 
 rc-service nginx restart || rc-service nginx start
 rc-service emby-agent restart || rc-service emby-agent start
+rc-service crond restart || rc-service crond start || true
 rc-service nginx status
 rc-service emby-agent status
-echo "当前节点 UTC 时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-echo 'Worker 安装完成。内部服务端口: 12345，Agent: 127.0.0.1:8081'
+
+echo "Worker HTTPS 安装完成。"
+echo "内部服务端口: 12345（HTTP/HTTPS 自动分流）"
+echo "证书覆盖: *.$BASE_DOMAIN"
+echo "证书自动续期: /etc/periodic/daily/emby-cert-renew"
+echo "NAT 节点仍需把公网服务端口映射到内部 12345。"
