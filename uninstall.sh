@@ -14,8 +14,9 @@ remove_master() {
         rm -f /etc/systemd/system/emby-panel.service
         systemctl daemon-reload
     fi
-    rm -f /etc/nginx/sites-enabled/emby-panel /etc/nginx/sites-enabled/emby-panel-http
-    rm -f /etc/nginx/sites-available/emby-panel /etc/nginx/sites-available/emby-panel-http
+    rm -f /etc/nginx/sites-enabled/emby-panel /etc/nginx/sites-enabled/emby-panel-http /etc/nginx/sites-enabled/emby-panel-https
+    rm -f /etc/nginx/sites-available/emby-panel /etc/nginx/sites-available/emby-panel-http /etc/nginx/sites-available/emby-panel-https
+    rm -f /etc/cron.daily/emby-edge-cert-renew /root/.secrets/emby-cloudflare.ini
     if [ -d /opt/emby_panel ]; then
         if confirm '是否保留主控数据库 panel.db？'; then
             save_dir="/root/emby-panel-data-$(date +%Y%m%d-%H%M%S)"
@@ -38,8 +39,9 @@ remove_worker() {
     rm -f /etc/init.d/emby-agent
     rm -rf /opt/emby_agent
     rm -f /etc/nginx/http.d/default.conf /etc/nginx/stream.d/emby.conf /etc/nginx/conf.d/emby-stream.conf
-    rm -f /etc/nginx/emby_url.map /etc/nginx/emby_sni.map /etc/periodic/daily/emby-cert-renew
+    rm -f /etc/nginx/emby_url.map /etc/nginx/emby_sni.map /etc/periodic/daily/emby-cert-renew /etc/periodic/daily/emby-cert-sync
     rm -f /root/.secrets/emby-cloudflare.ini
+    rm -rf /etc/ssl/emby
     nginx -t 2>/dev/null && { rc-service nginx restart 2>/dev/null || true; }
 }
 

@@ -2,7 +2,6 @@
 set -eu
 
 WORKER_ENV=/opt/emby_agent/.env
-CF_CREDENTIALS=/root/.secrets/emby-cloudflare.ini
 
 read_existing_value() {
     key=$1
@@ -20,11 +19,6 @@ read_existing_value() {
             exit
         }
     ' "$WORKER_ENV"
-}
-
-read_existing_cf_token() {
-    [ -f "$CF_CREDENTIALS" ] || return 0
-    sed -n 's/^dns_cloudflare_api_token[[:space:]]*=[[:space:]]*//p' "$CF_CREDENTIALS" | head -n 1
 }
 
 is_set() { [ -n "$1" ] && printf '已设置' || printf '未设置'; }
@@ -54,8 +48,6 @@ prompt_secret() {
 
 SECRET_KEY=${SECRET_KEY:-$(read_existing_value SECRET_KEY)}
 MASTER_IP=${MASTER_IP:-$(read_existing_value MASTER_IP)}
-BASE_DOMAIN=${BASE_DOMAIN:-$(read_existing_value BASE_DOMAIN)}
-CF_API_TOKEN=${CF_API_TOKEN:-$(read_existing_cf_token)}
 NODE_ID=${NODE_ID:-$(read_existing_value NODE_ID)}
 
 if [ -t 0 ]; then
@@ -63,19 +55,13 @@ if [ -t 0 ]; then
         printf '\n=== Emby Edge Worker HTTPS 安装配置 ===\n'
         printf '1. 主控公网 IP: %s\n' "${MASTER_IP:-未设置}"
         printf '2. 节点共享密钥: %s\n' "$(is_set "$SECRET_KEY")"
-        printf '3. 基础域名: %s\n' "${BASE_DOMAIN:-未设置}"
-        printf '4. Cloudflare API Token: %s\n' "$(is_set "$CF_API_TOKEN")"
-        printf '5. 节点证书标识: %s\n' "${NODE_ID:-自动生成}"
-        printf '6. 开始安装\n0. 退出\n请选择 [0-6]: '
+        printf '3. 开始安装（基础域名和 HTTPS 证书由主控自动下发）\n0. 退出\n请选择 [0-3]: '
         IFS= read -r choice
         case "$choice" in
             1) MASTER_IP=$(prompt_value '请输入主控公网 IP' "$MASTER_IP") ;;
             2) SECRET_KEY=$(prompt_secret '请输入节点共享密钥' "$SECRET_KEY") ;;
-            3) BASE_DOMAIN=$(prompt_value '请输入基础域名（不含协议，例如 example.com）' "$BASE_DOMAIN") ;;
-            4) CF_API_TOKEN=$(prompt_secret '请输入具备该 Zone DNS 编辑权限的 Cloudflare API Token' "$CF_API_TOKEN") ;;
-            5) NODE_ID=$(prompt_value '请输入节点证书标识（留空自动生成）' "$NODE_ID") ;;
-            6)
-                if [ -z "$MASTER_IP" ] || [ -z "$SECRET_KEY" ] || [ -z "$BASE_DOMAIN" ] || [ -z "$CF_API_TOKEN" ]; then
+            3)
+                if [ -z "$MASTER_IP" ] || [ -z "$SECRET_KEY" ]; then
                     echo '仍有必填配置未设置。'
                 else
                     break
@@ -88,14 +74,7 @@ if [ -t 0 ]; then
 else
     : "${SECRET_KEY:?SECRET_KEY must be set in non-interactive mode}"
     : "${MASTER_IP:?MASTER_IP must be set in non-interactive mode}"
-    : "${BASE_DOMAIN:?BASE_DOMAIN must be set in non-interactive mode}"
-    : "${CF_API_TOKEN:?CF_API_TOKEN must be set in non-interactive mode}"
 fi
-
-BASE_DOMAIN=$(printf '%s' "$BASE_DOMAIN" | sed 's#^[[:space:]]*https\?://##; s#/.*$##; s/^\.//; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')
-case "$BASE_DOMAIN" in
-    ''|*[!a-z0-9.-]*|.*|*..*|*.) echo '基础域名格式无效。' >&2; exit 1 ;;
-esac
 case "$MASTER_IP" in
     ''|*[!0-9a-fA-F:.]*) echo '主控公网 IP 格式无效。' >&2; exit 1 ;;
 esac
@@ -111,35 +90,31 @@ fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 AGENT_SOURCE="$SCRIPT_DIR/worker/agent.py"
-[ -f "$AGENT_SOURCE" ] || { echo "Missing $AGENT_SOURCE" >&2; exit 1; }
+CERT_SYNC_SOURCE="$SCRIPT_DIR/worker/cert_sync.py"
+[ -f "$AGENT_SOURCE" ] && [ -f "$CERT_SYNC_SOURCE" ] || { echo "Missing Worker source files" >&2; exit 1; }
 
 apk update
-apk add nginx nginx-mod-stream python3 chrony certbot certbot-dns-cloudflare
+apk add nginx nginx-mod-stream python3 py3-cryptography chrony
 
 stamp=$(date +%Y%m%d-%H%M%S)
 [ ! -d /opt/emby_agent ] || cp -a /opt/emby_agent "/opt/emby_agent.backup-$stamp"
 cp -a /etc/nginx "/etc/nginx.backup-emby-worker-$stamp"
 
-mkdir -p /opt/emby_agent /etc/nginx/http.d /etc/nginx/stream.d /root/.secrets
+mkdir -p /opt/emby_agent /etc/nginx/http.d /etc/nginx/stream.d /etc/ssl/emby
 cp "$AGENT_SOURCE" /opt/emby_agent/agent.py
+cp "$CERT_SYNC_SOURCE" /opt/emby_agent/cert_sync.py
 chmod 750 /opt/emby_agent/agent.py
+chmod 750 /opt/emby_agent/cert_sync.py
 touch /etc/nginx/emby_url.map /etc/nginx/emby_sni.map
 chmod 640 /etc/nginx/emby_url.map /etc/nginx/emby_sni.map
 
-cat > "$CF_CREDENTIALS" <<EOF
-dns_cloudflare_api_token=$CF_API_TOKEN
+cat > "$WORKER_ENV" <<EOF
+SECRET_KEY="$SECRET_KEY"
+MASTER_IP="$MASTER_IP"
+NODE_ID="$NODE_ID"
 EOF
-chmod 600 "$CF_CREDENTIALS"
-
-CERT_NAME="emby-worker-$NODE_ID"
-CERT_HOST="$NODE_ID.$BASE_DOMAIN"
-certbot certonly \
-    --dns-cloudflare \
-    --dns-cloudflare-credentials "$CF_CREDENTIALS" \
-    --dns-cloudflare-propagation-seconds 30 \
-    --non-interactive --agree-tos --register-unsafely-without-email \
-    --cert-name "$CERT_NAME" \
-    -d "*.$BASE_DOMAIN" -d "$CERT_HOST"
+chmod 600 "$WORKER_ENV"
+BASE_DOMAIN=$(python3 /opt/emby_agent/cert_sync.py)
 
 cat > /etc/nginx/http.d/default.conf <<EOF
 map \$host \$target_url {
@@ -195,8 +170,8 @@ server {
     server_name *.$BASE_DOMAIN;
     set_real_ip_from 127.0.0.1;
     real_ip_header proxy_protocol;
-    ssl_certificate /etc/letsencrypt/live/$CERT_NAME/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$CERT_NAME/privkey.pem;
+    ssl_certificate /etc/ssl/emby/fullchain.pem;
+    ssl_certificate_key /etc/ssl/emby/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
 
@@ -242,14 +217,7 @@ server {
 }
 EOF
 
-cat > "$WORKER_ENV" <<EOF
-SECRET_KEY="$SECRET_KEY"
-MASTER_IP="$MASTER_IP"
-BASE_DOMAIN="$BASE_DOMAIN"
-NODE_ID="$NODE_ID"
-CERT_NAME="$CERT_NAME"
-EOF
-chmod 600 "$WORKER_ENV"
+printf 'BASE_DOMAIN="%s"\n' "$BASE_DOMAIN" >> "$WORKER_ENV"
 
 cat > /etc/init.d/emby-agent <<'EOF'
 #!/sbin/openrc-run
@@ -266,11 +234,11 @@ EOF
 chmod +x /etc/init.d/emby-agent
 
 mkdir -p /etc/periodic/daily
-cat > /etc/periodic/daily/emby-cert-renew <<'EOF'
+cat > /etc/periodic/daily/emby-cert-sync <<'EOF'
 #!/bin/sh
-certbot renew --quiet --deploy-hook 'nginx -s reload'
+/usr/bin/python3 /opt/emby_agent/cert_sync.py >/dev/null
 EOF
-chmod 700 /etc/periodic/daily/emby-cert-renew
+chmod 700 /etc/periodic/daily/emby-cert-sync
 
 rc-update add nginx default
 rc-update add emby-agent default
@@ -297,6 +265,5 @@ rc-service emby-agent status
 
 echo "Worker HTTPS 安装完成。"
 echo "内部服务端口: 12345（HTTP/HTTPS 自动分流）"
-echo "证书覆盖: *.$BASE_DOMAIN"
-echo "证书自动续期: /etc/periodic/daily/emby-cert-renew"
+echo "证书由主控统一签发和更新。"
 echo "NAT 节点仍需把公网服务端口映射到内部 12345。"

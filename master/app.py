@@ -1,8 +1,9 @@
-import http.server, json, urllib.request, urllib.error
+import http.server, json, urllib.request, urllib.error, base64
 import subprocess, sqlite3, time, random, string
 import os, re, threading, hmac, hashlib, logging
 from urllib.parse import urlparse, urlsplit
 from ipaddress import ip_address
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 ENV = {}
 if os.path.exists('/opt/emby_panel/.env'):
@@ -18,6 +19,9 @@ CF_API_TOKEN = ENV.get('CF_API_TOKEN', '')
 CF_ZONE_ID = ENV.get('CF_ZONE_ID', '')
 BASE_DOMAIN = ENV.get('BASE_DOMAIN', 'example.com')
 PANEL_NAME = ENV.get('PANEL_NAME', 'Emby Edge')
+PANEL_DOMAIN = ENV.get('PANEL_DOMAIN', '').strip().lower()
+GLOBAL_SECRET_KEY = ENV.get('GLOBAL_SECRET_KEY', '')
+CERT_LOCK = threading.Lock()
 
 DB_FILE = "/opt/emby_panel/db/panel.db"
 MAX_BODY = 1024 * 1024
@@ -93,6 +97,30 @@ def audit(action, status, detail=''):
             conn.execute('INSERT INTO operation_logs(action,route_id,status,detail,created_at) VALUES(?,?,?,?,?)', (action, None, status, detail[:1000], time.time()))
     except Exception as e:
         logger.warning('audit-db-failed: %s', e)
+
+def worker_certificate(node_id):
+    if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?', node_id or ''):
+        raise ValueError('Invalid node ID')
+    cert_name = f'emby-worker-{node_id}'
+    cert_dir = f'/etc/letsencrypt/live/{cert_name}'
+    cert_file = os.path.join(cert_dir, 'fullchain.pem')
+    key_file = os.path.join(cert_dir, 'privkey.pem')
+    with CERT_LOCK:
+        if not os.path.isfile(cert_file) or not os.path.isfile(key_file):
+            command = [
+                'certbot', 'certonly', '--dns-cloudflare',
+                '--dns-cloudflare-credentials', '/root/.secrets/emby-cloudflare.ini',
+                '--dns-cloudflare-propagation-seconds', '30', '--non-interactive',
+                '--agree-tos', '--register-unsafely-without-email',
+                '--cert-name', cert_name,
+                '-d', f'*.{BASE_DOMAIN}', '-d', f'{node_id}.{BASE_DOMAIN}',
+            ]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+            if result.returncode != 0:
+                raise RuntimeError((result.stderr or result.stdout or 'certbot failed')[-500:])
+        with open(cert_file, encoding='utf-8') as f: certificate = f.read()
+        with open(key_file, encoding='utf-8') as f: private_key = f.read()
+    return certificate, private_key
 
 def call_remote_node(host, port, secret, action, sub, target):
     ts = int(time.time())
@@ -207,6 +235,36 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if len_ == 0: return self.send_resp(400, {'msg': 'No data'})
         try: data = json.loads(self.rfile.read(len_).decode('utf-8'))
         except (ValueError, UnicodeDecodeError): return self.send_resp(400, {'msg': 'Invalid JSON'})
+
+        # Worker installers and daily certificate refresh jobs authenticate
+        # before panel login with the cluster-wide HMAC secret.
+        if self.path == '/worker/bootstrap':
+            try: ts = int(data.get('t', 0))
+            except (TypeError, ValueError): return self.send_resp(403, {'msg': 'Invalid timestamp'})
+            if abs(time.time() - ts) > 60: return self.send_resp(403, {'msg': 'Timestamp expired'})
+            node_id = str(data.get('node_id', '')).strip().lower()
+            expected = hmac.new(GLOBAL_SECRET_KEY.encode('utf-8'), f'{ts}:worker-bootstrap:{node_id}'.encode('utf-8'), hashlib.sha256).hexdigest()
+            if not GLOBAL_SECRET_KEY or not hmac.compare_digest(expected, str(data.get('sign', ''))):
+                return self.send_resp(403, {'msg': 'Signature invalid'})
+            try:
+                certificate, private_key = worker_certificate(node_id)
+            except ValueError as e:
+                return self.send_resp(400, {'msg': str(e)})
+            except Exception as e:
+                logger.exception('worker-certificate-failed node=%s', node_id)
+                return self.send_resp(503, {'msg': f'节点证书签发失败: {e}'})
+            plaintext = json.dumps({
+                'base_domain': BASE_DOMAIN,
+                'certificate': certificate,
+                'private_key': private_key,
+            }).encode('utf-8')
+            nonce = os.urandom(12)
+            aes_key = hashlib.sha256(GLOBAL_SECRET_KEY.encode('utf-8')).digest()
+            ciphertext = AESGCM(aes_key).encrypt(nonce, plaintext, node_id.encode('utf-8'))
+            return self.send_resp(200, {
+                'nonce': base64.b64encode(nonce).decode('ascii'),
+                'ciphertext': base64.b64encode(ciphertext).decode('ascii'),
+            })
         
         if self.path == '/login':
             user, pwd, code = data.get('username', '').strip(), data.get('password', '').strip(), data.get('code', '').strip()
@@ -390,6 +448,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                     'username': session['username'],
                     'base_domain': BASE_DOMAIN,
                     'panel_name': PANEL_NAME,
+                    'panel_domain': PANEL_DOMAIN,
                     'expire': time.strftime("%Y-%m-%d", time.localtime(exp)),
                     'route_limit': route_limit,
                     'nodes': [{'id': n[0], 'name': n[1], 'online': n[4]} for n in nodes_data],
@@ -405,6 +464,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 return self.send_resp(200, {
                     'base_domain': BASE_DOMAIN,
                     'panel_name': PANEL_NAME,
+                    'panel_domain': PANEL_DOMAIN,
                     'codes': [{'code': c[0], 'dur': c[1], 'used': c[2], 'user': c[3]} for c in codes],
                     'nodes': [{'id': n[0], 'name': n[1], 'host': n[2], 'port': n[3], 'online': n[4]} for n in nodes_full],
                     'routes': [{'id': r[0], 'user': r[1], 'subdomain': r[2], 'target': r[3], 'node_name': r[4], 'node_id': r[5]} for r in routes],
