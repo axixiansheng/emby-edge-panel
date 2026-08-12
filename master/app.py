@@ -126,26 +126,24 @@ def cf_set(subdomain, target_host):
     if not response.get('success'): raise Exception(f"CF 更新失败: {response}")
 
 def cf_api(action, subdomain, target_host=""):
-    full_domain = f"{subdomain}.{BASE_DOMAIN}"
     if action == 'add':
-        api_url = f"https://api.cloudflare.com/client/v4/zones/{CF_ZONE_ID}/dns_records"
-        record_type = "A" if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", target_host) else "CNAME"
-        payload = {"type": record_type, "name": full_domain, "content": target_host, "proxied": False}
-        req = urllib.request.Request(api_url, data=json.dumps(payload).encode('utf-8'), method='POST')
-    else:
-        search_req = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones/{CF_ZONE_ID}/dns_records?name={full_domain}", method='GET')
-        search_req.add_header('Authorization', f'Bearer {CF_API_TOKEN}')
-        search_req.add_header('Content-Type', 'application/json')
-        resp = req_with_retry(search_req)
-        res_data = json.loads(resp.read().decode('utf-8'))
-        if not res_data.get('success') or len(res_data['result']) == 0: return
-        req = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones/{CF_ZONE_ID}/dns_records/{res_data['result'][0]['id']}", method='DELETE')
+        # Create and update use the same idempotent path. This also converts an
+        # existing proxied record to DNS-only, which is required for arbitrary
+        # Worker ports such as NAT-mapped 54321.
+        return cf_set(subdomain, target_host)
+
+    full_domain = f"{subdomain}.{BASE_DOMAIN}"
+    search_req = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones/{CF_ZONE_ID}/dns_records?name={full_domain}", method='GET')
+    search_req.add_header('Authorization', f'Bearer {CF_API_TOKEN}')
+    search_req.add_header('Content-Type', 'application/json')
+    resp = req_with_retry(search_req)
+    res_data = json.loads(resp.read().decode('utf-8'))
+    if not res_data.get('success') or len(res_data['result']) == 0: return
+    req = urllib.request.Request(f"https://api.cloudflare.com/client/v4/zones/{CF_ZONE_ID}/dns_records/{res_data['result'][0]['id']}", method='DELETE')
     
     req.add_header('Authorization', f'Bearer {CF_API_TOKEN}')
     req.add_header('Content-Type', 'application/json')
-    try: req_with_retry(req)
-    except urllib.error.HTTPError as e:
-        if action == 'add' and "already exists" not in e.read().decode('utf-8'): raise Exception(f"CF 解析拒绝，详细原因: {e.read().decode('utf-8')}")
+    req_with_retry(req)
 
 def heartbeat_worker():
     fails = {}
