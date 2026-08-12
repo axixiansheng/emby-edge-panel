@@ -1,20 +1,43 @@
 #!/bin/sh
 set -eu
 
-PANEL_PASSWORD=${PANEL_PASSWORD:-}
-CF_API_TOKEN=${CF_API_TOKEN:-}
-CF_ZONE_ID=${CF_ZONE_ID:-}
-BASE_DOMAIN=${BASE_DOMAIN:-}
-GLOBAL_SECRET_KEY=${GLOBAL_SECRET_KEY:-}
+EXISTING_ENV=/opt/emby_panel/.env
+
+read_existing_value() {
+    key=$1
+    [ -f "$EXISTING_ENV" ] || return 0
+    awk -v wanted="$key" '
+        index($0, wanted "=") == 1 {
+            value = substr($0, length(wanted) + 2)
+            sub(/^[[:space:]]+/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            if ((substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"") ||
+                (substr(value, 1, 1) == "\047" && substr(value, length(value), 1) == "\047")) {
+                value = substr(value, 2, length(value) - 2)
+            }
+            print value
+            exit
+        }
+    ' "$EXISTING_ENV"
+}
+
+# Explicit environment variables take precedence. Otherwise, a reinstall or
+# upgrade starts with the values already stored by the previous installation.
+PANEL_PASSWORD=${PANEL_PASSWORD:-$(read_existing_value PANEL_PASSWORD)}
+CF_API_TOKEN=${CF_API_TOKEN:-$(read_existing_value CF_API_TOKEN)}
+CF_ZONE_ID=${CF_ZONE_ID:-$(read_existing_value CF_ZONE_ID)}
+BASE_DOMAIN=${BASE_DOMAIN:-$(read_existing_value BASE_DOMAIN)}
+GLOBAL_SECRET_KEY=${GLOBAL_SECRET_KEY:-$(read_existing_value GLOBAL_SECRET_KEY)}
+PANEL_NAME=${PANEL_NAME:-$(read_existing_value PANEL_NAME)}
 PANEL_NAME=${PANEL_NAME:-Emby Edge}
 
 is_set() { [ -n "$1" ] && printf '已设置' || printf '未设置'; }
 prompt_value() {
     label=$1
     current=$2
-    printf '%s' "$label"
-    [ -z "$current" ] || printf ' [%s]' "$current"
-    printf ': '
+    printf '%s' "$label" >&2
+    [ -z "$current" ] || printf ' [%s]' "$current" >&2
+    printf ': ' >&2
     IFS= read -r answer
     [ -z "$answer" ] && answer=$current
     printf '%s' "$answer"
@@ -22,13 +45,13 @@ prompt_value() {
 prompt_secret() {
     label=$1
     current=$2
-    printf '%s' "$label"
-    [ -z "$current" ] || printf ' [直接回车保留当前值]'
-    printf ': '
+    printf '%s' "$label" >&2
+    [ -z "$current" ] || printf ' [直接回车保留当前值]' >&2
+    printf ': ' >&2
     stty -echo 2>/dev/null || true
     IFS= read -r answer
     stty echo 2>/dev/null || true
-    printf '\n'
+    printf '\n' >&2
     [ -z "$answer" ] && answer=$current
     printf '%s' "$answer"
 }

@@ -35,6 +35,8 @@ This produces `emby-edge-panel`, not `emby-edge-panel-main`.
 sudo ./install-master.sh
 ```
 
+再次运行安装器时，会自动读取 `/opt/emby_panel/.env` 中的现有配置并在菜单中显示为已设置；密码、Token 和共享密钥不会明文显示。直接回车可保留当前值。命令行预先导出的环境变量优先于现有配置。
+
 The menu lets you enter or modify:
 
 - panel administrator password
