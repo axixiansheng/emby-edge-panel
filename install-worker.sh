@@ -257,8 +257,24 @@ server {
 }
 EOF
 
+# Debian requires stream configuration to be nested in a stream{} context.
+# Remove the direct include written by the previous failed Worker installer,
+# then install a marked, removable stream block.
+if [ "$STREAM_INCLUDE_MANAGED" -eq 1 ]; then
+    sed -i '/# Emby Edge managed stream include/{N;N;N;d;}' /etc/nginx/nginx.conf
+    nginx_tmp=$(mktemp)
+    awk 'index($0, "include /etc/nginx/stream.d/*.conf;") == 0' /etc/nginx/nginx.conf > "$nginx_tmp"
+    cat "$nginx_tmp" > /etc/nginx/nginx.conf
+    rm -f "$nginx_tmp"
+fi
 if ! grep -RqsF 'include /etc/nginx/stream.d/*.conf;' /etc/nginx/nginx.conf /etc/nginx/modules-enabled 2>/dev/null; then
-    printf '\ninclude /etc/nginx/stream.d/*.conf;\n' >> /etc/nginx/nginx.conf
+    cat >> /etc/nginx/nginx.conf <<'EOF'
+
+# Emby Edge managed stream include
+stream {
+    include /etc/nginx/stream.d/*.conf;
+}
+EOF
     STREAM_INCLUDE_MANAGED=1
 fi
 [ "$STREAM_INCLUDE_MANAGED" -eq 0 ] || touch /opt/emby_agent/.stream_include_added

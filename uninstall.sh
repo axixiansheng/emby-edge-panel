@@ -73,7 +73,11 @@ remove_worker() {
     rm -rf /opt/emby_agent /opt/emby_agent.backup-* /opt/emby_agent.pre-*
     rm -f /etc/nginx/http.d/default.conf /etc/nginx/conf.d/emby-worker.conf /etc/nginx/stream.d/emby.conf /etc/nginx/conf.d/emby-stream.conf
     if [ "$stream_include_added" -eq 1 ] && [ -f /etc/nginx/nginx.conf ]; then
-        sed -i '\#^[[:space:]]*include /etc/nginx/stream.d/\*.conf;[[:space:]]*$#d' /etc/nginx/nginx.conf
+        sed -i '/# Emby Edge managed stream include/{N;N;N;d;}' /etc/nginx/nginx.conf
+        nginx_tmp=$(mktemp)
+        awk 'index($0, "include /etc/nginx/stream.d/*.conf;") == 0' /etc/nginx/nginx.conf > "$nginx_tmp"
+        cat "$nginx_tmp" > /etc/nginx/nginx.conf
+        rm -f "$nginx_tmp"
     fi
     rm -f /etc/nginx/emby_url.map /etc/nginx/emby_sni.map
     rm -f /etc/periodic/daily/emby-cert-renew /etc/periodic/daily/emby-cert-sync
