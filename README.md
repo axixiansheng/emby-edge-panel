@@ -28,7 +28,8 @@ Worker 使用 Nginx Stream 的 TLS 预读能力，在同一个内部端口 `1234
 - Worker 心跳、离线熔断与管理端状态展示
 - HTTP/HTTPS 同端口识别、Range 请求和 WebSocket 转发
 - 集群通配符证书集中签发、加密分发和自动续期
-- Alpine/OpenRC Worker 与 Debian/Ubuntu/systemd 主控
+- Alpine/OpenRC 与 Debian/Ubuntu/systemd Worker
+- Debian/Ubuntu/systemd 主控
 - 服务后台运行、开机自启及安装菜单状态检查
 - 独立、彻底的主控和 Worker 卸载流程
 
@@ -72,7 +73,7 @@ sudo ./install-worker.sh
 
 ## Worker 与 NAT 端口
 
-Worker 安装时只需填写主控公网 IP 和共享密钥。Worker 内部服务端口固定为 `12345`，但公网端口没有任何固定值。
+Worker 安装器自动识别 Alpine、Debian 和 Ubuntu。Alpine 使用 OpenRC 与 `/etc/periodic`，Debian/Ubuntu 使用 systemd service/timer；两类系统运行相同的 Agent、证书同步和 Nginx 双协议转发逻辑。安装时只需填写主控公网 IP 和共享密钥。Worker 内部服务端口固定为 `12345`，但公网端口没有任何固定值。
 
 例如服务商控制台提供以下映射：
 
@@ -108,7 +109,7 @@ https://用户名-线路缩写.基础域名:45678
 sudo ./uninstall.sh
 ```
 
-卸载器会检测主控和 Worker 是否存在，可分别删除。Worker 卸载会清理 Agent、OpenRC 服务、Nginx Map/Stream 配置、证书、证书同步任务、日志和备份；主控卸载会清理 systemd 服务、面板站点、Cloudflare 凭据、Certbot 续期配置和集群通配符证书。主控和 Worker 都不存在后，卸载器才会删除当前项目目录。
+卸载器会检测主控和 Worker 是否存在，可分别删除。Worker 卸载会清理 Agent、OpenRC 或 systemd 服务、Nginx Map/Stream 配置、证书、证书同步任务、日志和备份；主控卸载会清理 systemd 服务、面板站点、Cloudflare 凭据、Certbot 续期配置和集群通配符证书。主控和 Worker 都不存在后，卸载器才会删除当前项目目录。
 
 系统级 Nginx、Python、Certbot 等软件包不会自动删除，以免影响同机其他服务。
 

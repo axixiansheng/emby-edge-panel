@@ -46,6 +46,24 @@ prompt_secret() {
     printf '%s' "$answer"
 }
 
+show_worker_status() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --no-pager --full status nginx 2>/dev/null || true
+        systemctl --no-pager --full status emby-agent 2>/dev/null || true
+        systemctl --no-pager --full status emby-cert-sync.timer 2>/dev/null || true
+    elif command -v rc-service >/dev/null 2>&1; then
+        rc-service nginx status 2>/dev/null || true
+        rc-service emby-agent status 2>/dev/null || true
+    else
+        echo '当前系统未检测到受支持的服务管理器。'
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        ss -lntp 2>/dev/null | grep -E ':(12345|12346|12347|8081)[[:space:]]' || true
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -lnt 2>/dev/null | grep -E ':(12345|12346|12347|8081)[[:space:]]' || true
+    fi
+}
+
 SECRET_KEY=${SECRET_KEY:-$(read_existing_value SECRET_KEY)}
 MASTER_IP=${MASTER_IP:-$(read_existing_value MASTER_IP)}
 NODE_ID=${NODE_ID:-$(read_existing_value NODE_ID)}
@@ -69,13 +87,7 @@ if [ -t 0 ]; then
                 fi
                 ;;
             4)
-                if command -v rc-service >/dev/null 2>&1; then
-                    rc-service nginx status 2>/dev/null || true
-                    rc-service emby-agent status 2>/dev/null || true
-                    netstat -lnt 2>/dev/null | grep -E ':(12345|8081)[[:space:]]' || true
-                else
-                    echo '当前系统未检测到 OpenRC Worker 服务。'
-                fi
+                show_worker_status
                 ;;
             0) exit 0 ;;
             *) echo '无效选项。' ;;
@@ -103,14 +115,28 @@ AGENT_SOURCE="$SCRIPT_DIR/worker/agent.py"
 CERT_SYNC_SOURCE="$SCRIPT_DIR/worker/cert_sync.py"
 [ -f "$AGENT_SOURCE" ] && [ -f "$CERT_SYNC_SOURCE" ] || { echo "Missing Worker source files" >&2; exit 1; }
 
-apk update
-apk add nginx nginx-mod-stream python3 py3-cryptography chrony
+if command -v apk >/dev/null 2>&1; then
+    WORKER_PLATFORM=alpine
+    apk update
+    apk add nginx nginx-mod-stream python3 py3-cryptography chrony
+    HTTP_CONF=/etc/nginx/http.d/default.conf
+elif command -v apt-get >/dev/null 2>&1; then
+    WORKER_PLATFORM=debian
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nginx libnginx-mod-stream python3 python3-cryptography chrony iproute2
+    HTTP_CONF=/etc/nginx/conf.d/emby-worker.conf
+else
+    echo 'Worker 安装器仅支持 Alpine、Debian 和 Ubuntu。' >&2
+    exit 1
+fi
 
 stamp=$(date +%Y%m%d-%H%M%S)
+STREAM_INCLUDE_MANAGED=0
+[ ! -f /opt/emby_agent/.stream_include_added ] || STREAM_INCLUDE_MANAGED=1
 [ ! -d /opt/emby_agent ] || cp -a /opt/emby_agent "/opt/emby_agent.backup-$stamp"
 cp -a /etc/nginx "/etc/nginx.backup-emby-worker-$stamp"
 
-mkdir -p /opt/emby_agent /etc/nginx/http.d /etc/nginx/stream.d /etc/ssl/emby
+mkdir -p /opt/emby_agent "$(dirname "$HTTP_CONF")" /etc/nginx/stream.d /etc/ssl/emby
 cp "$AGENT_SOURCE" /opt/emby_agent/agent.py
 cp "$CERT_SYNC_SOURCE" /opt/emby_agent/cert_sync.py
 chmod 750 /opt/emby_agent/agent.py
@@ -126,7 +152,7 @@ EOF
 chmod 600 "$WORKER_ENV"
 BASE_DOMAIN=$(python3 /opt/emby_agent/cert_sync.py)
 
-cat > /etc/nginx/http.d/default.conf <<EOF
+cat > "$HTTP_CONF" <<EOF
 map \$host \$target_url {
     default "";
     include /etc/nginx/emby_url.map;
@@ -134,6 +160,10 @@ map \$host \$target_url {
 map \$host \$target_sni {
     default "";
     include /etc/nginx/emby_sni.map;
+}
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    '' close;
 }
 
 server {
@@ -227,8 +257,15 @@ server {
 }
 EOF
 
+if ! grep -RqsF 'include /etc/nginx/stream.d/*.conf;' /etc/nginx/nginx.conf /etc/nginx/modules-enabled 2>/dev/null; then
+    printf '\ninclude /etc/nginx/stream.d/*.conf;\n' >> /etc/nginx/nginx.conf
+    STREAM_INCLUDE_MANAGED=1
+fi
+[ "$STREAM_INCLUDE_MANAGED" -eq 0 ] || touch /opt/emby_agent/.stream_include_added
+
 printf 'BASE_DOMAIN="%s"\n' "$BASE_DOMAIN" >> "$WORKER_ENV"
 
+if [ "$WORKER_PLATFORM" = alpine ]; then
 cat > /etc/init.d/emby-agent <<'EOF'
 #!/sbin/openrc-run
 name="emby-agent"
@@ -253,25 +290,83 @@ chmod 700 /etc/periodic/daily/emby-cert-sync
 rc-update add nginx default
 rc-update add emby-agent default
 rc-update add crond default >/dev/null 2>&1 || true
+else
+cat > /etc/systemd/system/emby-agent.service <<'EOF'
+[Unit]
+Description=Emby Edge Worker Agent
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/emby_agent
+ExecStart=/usr/bin/python3 /opt/emby_agent/agent.py
+Restart=always
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/emby-cert-sync.service <<'EOF'
+[Unit]
+Description=Synchronize Emby Edge Worker certificate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/emby_agent/cert_sync.py
+EOF
+
+cat > /etc/systemd/system/emby-cert-sync.timer <<'EOF'
+[Unit]
+Description=Daily Emby Edge Worker certificate synchronization
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable nginx emby-agent emby-cert-sync.timer
+fi
+
 python3 -m py_compile /opt/emby_agent/agent.py
+python3 -m py_compile /opt/emby_agent/cert_sync.py
 nginx -t
 
-if rc-service chronyd restart 2>/tmp/emby-chrony-error.log; then
+if [ "$WORKER_PLATFORM" = alpine ] && rc-service chronyd restart 2>/tmp/emby-chrony-error.log; then
     rc-update add chronyd default >/dev/null 2>&1 || true
     echo 'Chrony 已启动，系统时间会自动同步。'
+elif [ "$WORKER_PLATFORM" = debian ] && systemctl enable --now chrony 2>/tmp/emby-chrony-error.log; then
+    echo 'Chrony 已启动，系统时间会自动同步。'
 else
-    rc-service chronyd stop >/dev/null 2>&1 || true
-    rc-update del chronyd default >/dev/null 2>&1 || true
+    if [ "$WORKER_PLATFORM" = alpine ]; then
+        rc-service chronyd stop >/dev/null 2>&1 || true
+        rc-update del chronyd default >/dev/null 2>&1 || true
+    else
+        systemctl disable --now chrony >/dev/null 2>&1 || true
+    fi
     echo '警告：当前虚拟化环境不允许 Chrony 调整系统时间，已跳过。' >&2
     echo 'Worker 仍会继续安装，但节点 UTC 时间必须由宿主机保持准确（误差不超过 60 秒）。' >&2
 fi
 rm -f /tmp/emby-chrony-error.log
 
-rc-service nginx restart || rc-service nginx start
-rc-service emby-agent restart || rc-service emby-agent start
-rc-service crond restart || rc-service crond start || true
-rc-service nginx status
-rc-service emby-agent status
+if [ "$WORKER_PLATFORM" = alpine ]; then
+    rc-service nginx restart || rc-service nginx start
+    rc-service emby-agent restart || rc-service emby-agent start
+    rc-service crond restart || rc-service crond start || true
+else
+    systemctl restart nginx
+    systemctl restart emby-agent
+    systemctl start emby-cert-sync.timer
+fi
+show_worker_status
 
 echo "Worker HTTPS 安装完成。"
 echo "内部服务端口: 12345（HTTP/HTTPS 自动分流）"

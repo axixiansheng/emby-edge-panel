@@ -16,7 +16,7 @@ master_exists() {
 
 worker_exists() {
     [ -d /opt/emby_agent ] || [ -f /etc/init.d/emby-agent ] || \
-    [ -f /etc/nginx/stream.d/emby.conf ] || [ -d /etc/ssl/emby ]
+    [ -f /etc/systemd/system/emby-agent.service ] || [ -f /etc/nginx/stream.d/emby.conf ] || [ -d /etc/ssl/emby ]
 }
 
 cleanup_project_if_unused() {
@@ -57,21 +57,35 @@ remove_master() {
 
 remove_worker() {
     echo '正在彻底移除 Worker 服务...'
+    stream_include_added=0
+    [ ! -f /opt/emby_agent/.stream_include_added ] || stream_include_added=1
     if command -v rc-service >/dev/null 2>&1; then
         rc-service emby-agent stop 2>/dev/null || true
         rc-update del emby-agent default 2>/dev/null || true
     fi
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now emby-agent emby-cert-sync.timer 2>/dev/null || true
+        rm -f /etc/systemd/system/emby-agent.service /etc/systemd/system/emby-cert-sync.service /etc/systemd/system/emby-cert-sync.timer
+        systemctl daemon-reload 2>/dev/null || true
+    fi
     pkill -f '/opt/emby_agent/agent.py' 2>/dev/null || true
     rm -f /etc/init.d/emby-agent
     rm -rf /opt/emby_agent /opt/emby_agent.backup-* /opt/emby_agent.pre-*
-    rm -f /etc/nginx/http.d/default.conf /etc/nginx/stream.d/emby.conf /etc/nginx/conf.d/emby-stream.conf
+    rm -f /etc/nginx/http.d/default.conf /etc/nginx/conf.d/emby-worker.conf /etc/nginx/stream.d/emby.conf /etc/nginx/conf.d/emby-stream.conf
+    if [ "$stream_include_added" -eq 1 ] && [ -f /etc/nginx/nginx.conf ]; then
+        sed -i '\#^[[:space:]]*include /etc/nginx/stream.d/\*.conf;[[:space:]]*$#d' /etc/nginx/nginx.conf
+    fi
     rm -f /etc/nginx/emby_url.map /etc/nginx/emby_sni.map
     rm -f /etc/periodic/daily/emby-cert-renew /etc/periodic/daily/emby-cert-sync
     rm -rf /etc/ssl/emby
     rm -f /var/log/emby-agent.log /var/log/emby-agent.err
     rm -rf /etc/nginx.backup-emby-worker-* /etc/nginx.pre-emby-worker-*
     if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
-        rc-service nginx reload 2>/dev/null || rc-service nginx restart 2>/dev/null || true
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || true
+        else
+            rc-service nginx reload 2>/dev/null || rc-service nginx restart 2>/dev/null || true
+        fi
     fi
 }
 
@@ -84,7 +98,11 @@ case "$choice" in
     2) confirm '确认卸载 Worker？' && remove_worker ;;
     3) confirm '确认卸载主控和 Worker？' && { remove_master; remove_worker; } ;;
     4)
-        command -v systemctl >/dev/null 2>&1 && systemctl is-active emby-panel 2>/dev/null || true
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl is-active emby-panel 2>/dev/null || true
+            systemctl is-active emby-agent 2>/dev/null || true
+            systemctl is-active emby-cert-sync.timer 2>/dev/null || true
+        fi
         command -v rc-service >/dev/null 2>&1 && rc-service emby-agent status 2>/dev/null || true
         exit 0
         ;;
