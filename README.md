@@ -73,6 +73,8 @@ sudo sh rollback.sh /opt/emby-backups/upgrade-时间戳
 
 数据库灾难恢复与代码回档是两种不同操作。只有在确认可以舍弃备份之后的数据，并停止所有数据库写入时，才能另行恢复数据库备份。
 
+Nginx 回档仅恢复 `sites-available/emby-panel` 和 `sites-available/emby-panel-https`，不会恢复其他项目的站点或全局配置。
+
 ## Worker
 
 ```sh

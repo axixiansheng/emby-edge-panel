@@ -28,7 +28,7 @@ if [ -f "$BACKUP/previous-image" ]; then
     docker tag "$(cat "$BACKUP/previous-image")" emby-edge-panel:2.0.0
     docker rm emby-edge-panel >/dev/null
     docker compose -f "$BACKUP/compose.yaml" up -d --no-build
-    tar -xzf "$BACKUP/deployment.tar.gz" -C / etc/nginx
+    python3 "$ROOT/tools/restore_panel_nginx.py" "$BACKUP/deployment.tar.gz"
     nginx -t
     systemctl reload nginx
     echo "Previous Docker release restored; current user data preserved."
@@ -37,7 +37,7 @@ fi
 [ -f "$BACKUP/emby-panel.service" ] || { echo "Legacy service backup missing" >&2; docker start emby-edge-panel; exit 1; }
 tar -xzf "$BACKUP/deployment.tar.gz" -C /opt emby_panel/app.py emby_panel/frontend
 python3 "$ROOT/tools/prepare_legacy_rollback.py" /opt/emby_panel/app.py "$ROOT/master/security.py"
-tar -xzf "$BACKUP/deployment.tar.gz" -C / etc/nginx
+python3 "$ROOT/tools/restore_panel_nginx.py" "$BACKUP/deployment.tar.gz"
 cp "$BACKUP/emby-panel.service" /etc/systemd/system/emby-panel.service
 systemctl daemon-reload
 systemctl enable --now emby-panel

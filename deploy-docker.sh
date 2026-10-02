@@ -77,7 +77,7 @@ for name in ("emby-panel", "emby-panel-https"):
         path.write_text(content.replace(old, new))
 PY
 restore_nginx() {
-    tar -xzf "$BACKUP/deployment.tar.gz" -C / etc/nginx
+    python3 "$ROOT/tools/restore_panel_nginx.py" "$BACKUP/deployment.tar.gz"
 }
 if ! nginx -t; then restore_nginx; exit 1; fi
 
