@@ -6,6 +6,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 docker compose version >/dev/null
 [ -s /opt/emby_panel/.env ] || { echo "Run install-master.sh to configure the master first" >&2; exit 1; }
 docker compose -f "$ROOT/compose.yaml" config --quiet
+IMAGE=$(docker compose -f "$ROOT/compose.yaml" config --images)
 if ! python3 -c 'import argon2' >/dev/null 2>&1; then
     # Ensure native rollback can authenticate users created by the new container.
     DEBIAN_FRONTEND=noninteractive apt-get install -y python3-argon2
@@ -47,7 +48,7 @@ docker run -d --name "$CANDIDATE" --env-file /opt/emby_panel/.env \
     -v "$BACKUP/preflight:/data" -p 127.0.0.1::8080 \
     --memory=192m --cpus=1 --cap-drop=ALL --security-opt=no-new-privileges \
     --read-only --tmpfs /tmp:size=16m \
-    --user 0:0 emby-edge-panel:2.0.0 >/dev/null
+    --user 0:0 "$IMAGE" >/dev/null
 PORT=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8080/tcp") 0).HostPort}}' "$CANDIDATE")
 ready=0
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -87,7 +88,8 @@ rollback() {
     docker rm -f emby-edge-panel >/dev/null 2>&1 || true
     restore_nginx
     if [ -f "$BACKUP/previous-image" ]; then
-        docker tag "$(cat "$BACKUP/previous-image")" emby-edge-panel:2.0.0
+        previous_image=$(docker compose -f "$BACKUP/compose.yaml" config --images)
+        docker tag "$(cat "$BACKUP/previous-image")" "$previous_image"
         docker compose -f "$ROOT/compose.yaml" up -d --no-build
     elif [ "$legacy" -eq 1 ]; then
         systemctl enable --now emby-panel

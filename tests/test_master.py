@@ -308,6 +308,22 @@ class MasterTests(unittest.TestCase):
             self.assertEqual(403, client.get("/api/admin/data", headers=headers).status_code)
             self.assertEqual(403, client.post("/api/admin/update_announcement", json={"text": "bad"}, headers=headers).status_code)
 
+    def test_frontend_assets_keep_security_headers_and_closed_allowlist(self):
+        app = create_app(self.config, self.remote, background=False)
+        with TestClient(app) as client:
+            for name in ("index.html", "panel.js", "panel.css", "lucide.min.js", "edge-mark.svg", "edge-mesh.svg"):
+                with self.subTest(asset=name):
+                    response = client.get("/assets/" + name)
+                    self.assertEqual(200, response.status_code)
+                    self.assertEqual("no-cache", response.headers["cache-control"])
+                    self.assertEqual("nosniff", response.headers["x-content-type-options"])
+                    self.assertIn("script-src 'self'", response.headers["content-security-policy"])
+                    self.assertNotIn("'unsafe-inline'", response.headers["content-security-policy"])
+                    if name.endswith(".svg"):
+                        self.assertIn("image/svg+xml", response.headers["content-type"])
+            self.assertEqual(404, client.get("/assets/security.py").status_code)
+            self.assertEqual(404, client.get("/assets/unknown.svg").status_code)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,93 +1,125 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f7f8fa">
   <title>Emby Edge</title>
+  <link rel="icon" href="/assets/edge-mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/panel.css">
   <script defer src="/assets/lucide.min.js"></script>
   <script defer src="/assets/panel.js"></script>
 </head>
 <body>
-  <header>
-    <div class="brand"><i data-lucide="network"></i><span id="brand">Emby Edge</span></div>
-    <div class="header-actions" id="header-actions" hidden>
-      <span id="identity"></span>
-      <button type="button" class="icon" id="refresh" title="刷新" aria-label="刷新"><i data-lucide="refresh-cw"></i></button>
-      <button type="button" class="icon" id="logout" title="退出登录" aria-label="退出登录"><i data-lucide="log-out"></i></button>
+  <a class="skip-link" href="#main">跳转到主要内容</a>
+  <header class="topbar">
+    <div class="brand header-brand"><span class="brand-symbol"><i data-lucide="waypoints"></i></span><span id="brand" data-panel-name>Emby Edge</span></div>
+    <div class="breadcrumb" id="breadcrumb" hidden><span id="workspace-label">工作空间</span><i data-lucide="chevron-right"></i><span id="current-view">线路</span></div>
+    <div class="topbar-actions">
+      <div class="theme-control" role="group" aria-label="外观">
+        <button type="button" class="icon" data-theme-choice="light" title="浅色外观" aria-label="浅色外观" aria-pressed="true"><i data-lucide="sun"></i></button>
+        <button type="button" class="icon" data-theme-choice="dark" title="深色外观" aria-label="深色外观" aria-pressed="false"><i data-lucide="moon"></i></button>
+        <button type="button" class="icon" data-theme-choice="system" title="跟随系统" aria-label="跟随系统" aria-pressed="false"><i data-lucide="monitor"></i></button>
+      </div>
+      <div class="header-actions" id="header-actions" hidden>
+        <button type="button" class="icon" id="refresh" title="刷新数据" aria-label="刷新数据"><i data-lucide="refresh-cw"></i></button>
+        <button type="button" class="icon" id="logout" title="退出登录" aria-label="退出登录"><i data-lucide="log-out"></i></button>
+      </div>
     </div>
   </header>
-  <main>
+  <aside id="sidebar" class="sidebar" hidden aria-label="工作空间导航">
+    <div class="brand sidebar-brand"><span class="brand-symbol"><i data-lucide="waypoints"></i></span><span data-panel-name>Emby Edge</span></div>
+    <div class="sidebar-section">工作空间</div>
+    <nav id="navigation" aria-label="面板视图"></nav>
+    <div class="sidebar-bottom">
+      <div class="connection-status"><span class="connection-dot"></span><span id="connection-label">已连接主控</span></div>
+      <div class="account">
+        <span class="avatar" id="avatar" aria-hidden="true">A</span>
+        <div class="account-details"><strong id="identity"></strong><span id="role-label">用户</span></div>
+        <i data-lucide="shield-check" id="account-icon"></i>
+      </div>
+    </div>
+  </aside>
+  <main id="main" tabindex="-1">
     <section id="auth" class="auth">
-      <h1>账户</h1>
-      <div class="tabs auth-tabs" role="tablist">
-        <button type="button" role="tab" aria-selected="true" data-auth="login">登录</button>
-        <button type="button" role="tab" aria-selected="false" data-auth="register">注册</button>
+      <div class="auth-emblem" aria-hidden="true"><i data-lucide="waypoints"></i></div>
+      <h1 data-panel-name>Emby Edge</h1>
+      <p class="auth-caption" id="auth-caption">账户登录</p>
+      <div class="tabs auth-tabs" role="tablist" aria-label="账户">
+        <button type="button" role="tab" aria-selected="true" aria-controls="auth-form" data-auth="login">登录</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="auth-form" data-auth="register">注册</button>
       </div>
       <form id="auth-form">
-        <label>用户名<input name="username" autocomplete="username" minlength="2" maxlength="24" pattern="[A-Za-z0-9]{2,24}" required></label>
-        <label>密码<input name="password" type="password" autocomplete="current-password" maxlength="1024" required></label>
-        <label id="code-label" hidden>授权码<input name="code" autocomplete="off" maxlength="128"></label>
+        <label for="auth-username">用户名</label>
+        <div class="input-affix"><i data-lucide="user-round"></i><input id="auth-username" name="username" autocomplete="username" minlength="2" maxlength="24" pattern="[A-Za-z0-9]{2,24}" placeholder="用户名" required></div>
+        <label for="auth-password">密码</label>
+        <div class="input-affix password-field"><i data-lucide="lock-keyhole"></i><input id="auth-password" name="password" type="password" autocomplete="current-password" maxlength="1024" placeholder="密码" required><button type="button" class="icon" id="password-toggle" title="显示密码" aria-label="显示密码" aria-pressed="false"><i data-lucide="eye"></i></button></div>
+        <div id="code-label" hidden><label for="auth-code">授权码</label><div class="input-affix"><i data-lucide="ticket"></i><input id="auth-code" name="code" autocomplete="off" maxlength="128" placeholder="授权码"></div></div>
         <p id="auth-error" class="error" role="alert"></p>
-        <button class="primary full" type="submit"><i data-lucide="log-in"></i><span id="auth-submit">登录</span></button>
+        <button class="primary full auth-submit" type="submit"><span id="auth-submit">登录</span><i data-lucide="arrow-right"></i></button>
       </form>
+      <div class="auth-footer"><i data-lucide="shield-check"></i><span>Emby Edge Panel</span></div>
     </section>
     <section id="workspace" hidden>
-      <div class="page-heading"><h1 id="heading">我的线路</h1><span id="summary" class="muted"></span></div>
-      <aside id="announcement" class="announcement" hidden></aside>
-      <nav class="tabs" id="navigation" aria-label="面板视图"></nav>
-      <section id="routes-view" class="view">
+      <div class="page-heading">
+        <div><p class="eyebrow" id="page-eyebrow">WORKSPACE</p><h1 id="heading">我的线路</h1><span id="summary" class="muted"></span></div>
+        <span class="workspace-tag" id="workspace-tag"><i data-lucide="user-round"></i><span>用户空间</span></span>
+      </div>
+      <section id="metrics" class="metrics" aria-label="概览"></section>
+      <aside id="announcement" class="announcement" hidden><i data-lucide="megaphone" aria-hidden="true"></i><div><strong>公告</strong><p id="announcement-text"></p></div></aside>
+      <section id="routes-view" class="view" aria-label="线路">
+        <div class="section-heading"><div><h2 id="routes-heading">我的线路</h2><span class="section-count" id="route-count">0</span></div></div>
         <div class="toolbar">
           <label class="search"><i data-lucide="search"></i><input id="route-search" type="search" placeholder="搜索线路、源站或用户" aria-label="搜索线路"></label>
-          <button type="button" class="primary" id="new-route"><i data-lucide="plus"></i>新建线路</button>
+          <div class="toolbar-actions"><select id="route-node-filter" aria-label="筛选节点"><option value="">全部节点</option></select><button type="button" class="primary" id="new-route"><i data-lucide="plus"></i><span>新建线路</span></button></div>
         </div>
-        <div class="table-scroll"><table><thead id="route-head"></thead><tbody id="route-body"></tbody></table></div>
-        <p id="route-empty" class="empty" hidden>暂无线路</p>
+        <div class="table-scroll"><table><thead id="route-head"></thead><tbody id="route-body"></tbody></table><div id="route-empty" class="empty" hidden><span class="empty-symbol"><i data-lucide="route"></i></span><p>暂无线路</p></div></div>
       </section>
-      <section id="nodes-view" class="view" hidden>
-        <div class="toolbar"><h2>节点</h2><button type="button" class="primary" id="new-node"><i data-lucide="plus"></i>添加节点</button></div>
-        <div class="table-scroll"><table><thead><tr><th>名称</th><th>通信地址</th><th>公网端口</th><th>状态</th><th>操作</th></tr></thead><tbody id="node-body"></tbody></table></div>
-        <p id="node-empty" class="empty" hidden>暂无节点</p>
+      <section id="nodes-view" class="view" aria-label="节点" hidden>
+        <div class="toolbar section-heading"><div><h2>节点管理</h2><span class="section-count" id="node-count">0</span></div><button type="button" class="primary" id="new-node"><i data-lucide="plus"></i>添加节点</button></div>
+        <div class="table-scroll"><table><thead><tr><th>名称</th><th>通信地址</th><th>公网端口</th><th>状态</th><th>操作</th></tr></thead><tbody id="node-body"></tbody></table><div id="node-empty" class="empty" hidden><span class="empty-symbol"><i data-lucide="server"></i></span><p>暂无节点</p></div></div>
       </section>
-      <section id="users-view" class="view" hidden>
-        <div class="table-scroll"><table><thead><tr><th>用户名</th><th>有效期</th><th>线路数</th><th>额度</th><th>操作</th></tr></thead><tbody id="user-body"></tbody></table></div>
-        <p id="user-empty" class="empty" hidden>暂无用户</p>
+      <section id="users-view" class="view" aria-label="用户" hidden>
+        <div class="section-heading"><div><h2>用户管理</h2><span class="section-count" id="user-count">0</span></div></div>
+        <div class="table-scroll"><table><thead><tr><th>用户名</th><th>有效期</th><th>线路数</th><th>额度</th><th>操作</th></tr></thead><tbody id="user-body"></tbody></table><div id="user-empty" class="empty" hidden><span class="empty-symbol"><i data-lucide="users-round"></i></span><p>暂无用户</p></div></div>
       </section>
-      <section id="codes-view" class="view" hidden>
+      <section id="codes-view" class="view" aria-label="授权码" hidden>
+        <div class="section-heading"><div><h2>授权码</h2><span class="section-count" id="code-count">0</span></div></div>
         <form id="code-form" class="toolbar">
           <label class="inline-label">初始线路额度<input name="route_limit" type="number" min="1" max="1000" value="3" required></label>
           <button type="submit" class="primary"><i data-lucide="ticket-plus"></i>签发授权码</button>
         </form>
-        <div class="table-scroll"><table><thead><tr><th>授权码</th><th>额度</th><th>状态</th><th>绑定用户</th><th>操作</th></tr></thead><tbody id="code-body"></tbody></table></div>
-        <p id="code-empty" class="empty" hidden>暂无授权码</p>
+        <div class="table-scroll"><table><thead><tr><th>授权码</th><th>额度</th><th>状态</th><th>绑定用户</th><th>操作</th></tr></thead><tbody id="code-body"></tbody></table><div id="code-empty" class="empty" hidden><span class="empty-symbol"><i data-lucide="ticket"></i></span><p>暂无授权码</p></div></div>
       </section>
-      <section id="operations-view" class="view" hidden>
-        <div class="table-scroll"><table><thead><tr><th>线路</th><th>操作</th><th>状态</th><th>阶段</th><th>详情</th></tr></thead><tbody id="operation-body"></tbody></table></div>
-        <p id="operation-empty" class="empty" hidden>暂无任务</p>
+      <section id="operations-view" class="view" aria-label="任务" hidden>
+        <div class="section-heading"><div><h2>线路任务</h2><span class="section-count" id="operation-count">0</span></div></div>
+        <div class="table-scroll"><table><thead><tr><th>线路</th><th>操作</th><th>状态</th><th>阶段</th><th>详情</th></tr></thead><tbody id="operation-body"></tbody></table><div id="operation-empty" class="empty" hidden><span class="empty-symbol"><i data-lucide="list-checks"></i></span><p>暂无线路变更任务</p></div></div>
       </section>
-      <section id="settings-view" class="view" hidden>
+      <section id="settings-view" class="view" aria-label="公告" hidden>
+        <div class="section-heading"><div><h2>公告管理</h2></div></div>
         <form id="announcement-form" class="settings-form">
-          <label>公告<textarea name="text" rows="6" maxlength="10000"></textarea></label>
-          <button type="submit" class="primary"><i data-lucide="save"></i>发布公告</button>
+          <label>公告内容<textarea name="text" rows="8" maxlength="10000"></textarea></label>
+          <div class="settings-actions"><span class="muted" id="announcement-count">0 / 10000</span><button type="submit" class="primary"><i data-lucide="send"></i>发布公告</button></div>
         </form>
       </section>
+      <footer class="workspace-footer"><span>Emby Edge Panel</span><span id="last-updated" role="status"></span></footer>
     </section>
   </main>
-  <dialog id="route-dialog">
+  <dialog id="route-dialog" aria-labelledby="route-title">
     <form id="route-form">
-      <div class="dialog-heading"><h2 id="route-title">新建线路</h2><button type="button" class="icon close" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
-      <label id="suffix-label">线路缩写<input name="subdomain" maxlength="32" pattern="[a-z0-9][a-z0-9-]*" required></label>
-      <p id="route-preview" class="muted mono"></p>
+      <div class="dialog-heading"><span class="dialog-symbol"><i data-lucide="route"></i></span><h2 id="route-title">新建线路</h2><button type="button" class="icon close" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <label id="suffix-label">线路缩写<input name="subdomain" maxlength="32" pattern="[a-z0-9][a-z0-9-]*" placeholder="main" required></label>
+      <p id="route-preview" class="route-preview mono"></p>
       <label>节点<select name="node_id" required></select></label>
       <label>源站地址<input name="target" maxlength="2048" placeholder="https://emby.example.com:8096" required></label>
       <p class="error form-error" role="alert"></p>
       <div class="dialog-actions"><button type="button" class="close">取消</button><button type="submit" class="primary"><i data-lucide="check"></i>提交</button></div>
     </form>
   </dialog>
-  <dialog id="node-dialog">
+  <dialog id="node-dialog" aria-labelledby="node-title">
     <form id="node-form">
-      <div class="dialog-heading"><h2>添加节点</h2><button type="button" class="icon close" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <div class="dialog-heading"><span class="dialog-symbol"><i data-lucide="server"></i></span><h2 id="node-title">添加节点</h2><button type="button" class="icon close" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
       <label>节点名称<input name="name" maxlength="80" required></label>
       <label>公网 IP 或域名<input name="host" maxlength="253" required></label>
       <div class="form-grid">
@@ -99,11 +131,12 @@
       <div class="dialog-actions"><button type="button" class="close">取消</button><button type="submit" class="primary"><i data-lucide="check"></i>添加</button></div>
     </form>
   </dialog>
-  <dialog id="confirm-dialog">
-    <div class="dialog-heading"><h2 id="confirm-title"></h2><button type="button" class="icon close" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <div class="dialog-heading"><span class="dialog-symbol destructive"><i data-lucide="trash-2"></i></span><h2 id="confirm-title"></h2><button type="button" class="icon close" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
     <p id="confirm-text"></p>
     <div class="dialog-actions"><button type="button" class="close">取消</button><button type="button" class="danger" id="confirm-yes"><i data-lucide="trash-2"></i>确认删除</button></div>
   </dialog>
-  <div id="toast" role="status" hidden></div>
+  <div id="toast" role="status" aria-live="polite" hidden><i data-lucide="circle-check"></i><span id="toast-text"></span><button type="button" class="icon" id="toast-close" title="关闭通知" aria-label="关闭通知"><i data-lucide="x"></i></button></div>
+  <div id="tooltip" role="tooltip" hidden></div>
 </body>
 </html>

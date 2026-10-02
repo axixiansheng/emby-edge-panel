@@ -25,7 +25,8 @@ if ! check_operations; then
     exit 1
 fi
 if [ -f "$BACKUP/previous-image" ]; then
-    docker tag "$(cat "$BACKUP/previous-image")" emby-edge-panel:2.0.0
+    previous_image=$(docker compose -f "$BACKUP/compose.yaml" config --images)
+    docker tag "$(cat "$BACKUP/previous-image")" "$previous_image"
     docker rm emby-edge-panel >/dev/null
     docker compose -f "$BACKUP/compose.yaml" up -d --no-build
     python3 "$ROOT/tools/restore_panel_nginx.py" "$BACKUP/deployment.tar.gz"

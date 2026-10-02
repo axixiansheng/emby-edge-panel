@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1200" viewBox="0 0 1920 1200" fill="none">
+  <g stroke="#929aa8" stroke-opacity=".1">
+    <path d="M0 180h460l180 180M0 220h442l182 180M0 260h424l184 180M0 300h406l186 180M0 340h388l188 180M0 380h370l190 180"/>
+    <path d="M1920 650h-390l-195-195M1920 690h-408l-199-199M1920 730h-426l-203-203M1920 770h-444l-207-207M1920 810h-462l-211-211M1920 850h-480l-215-215"/>
+    <path d="M240 1200V920l250-250M280 1200V938l250-250M320 1200V956l250-250M360 1200V974l250-250"/>
+    <path d="M1420 0v190l-180 180M1460 0v208l-180 180M1500 0v226l-180 180M1540 0v244l-180 180"/>
+  </g>
+  <g stroke="#d54635" stroke-opacity=".2" stroke-width="1.5">
+    <path d="M0 260h424l184 180"/>
+    <path d="M1920 730h-426l-203-203"/>
+    <path d="M280 1200V938l250-250"/>
+    <path d="M1500 0v226l-180 180"/>
+  </g>
+  <g fill="#d54635" fill-opacity=".3">
+    <rect x="419" y="255" width="10" height="10" rx="2"/>
+    <rect x="1489" y="725" width="10" height="10" rx="2"/>
+    <rect x="275" y="933" width="10" height="10" rx="2"/>
+    <rect x="1495" y="221" width="10" height="10" rx="2"/>
+  </g>
+</svg>
