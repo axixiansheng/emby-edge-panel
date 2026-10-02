@@ -33,7 +33,7 @@ def create_app(config=None, integrations=None, background=True):
         await anyio.to_thread.run_sync(database.initialize)
         app.state.service = Service(settings, database, integrations or Integrations(settings))
         app.state.limiter = anyio.CapacityLimiter(16)
-        app.state.auth_limiter = anyio.CapacityLimiter(8)
+        app.state.auth_limiter = anyio.CapacityLimiter(2)
         if background and os.environ.get("EMBY_BACKGROUND", "1") != "0":
             app.state.service.start()
         yield
