@@ -6,6 +6,8 @@ v2 保留原有业务模型，重点重构并发控制、线路状态一致性�
 
 [安装与部署](docs/deployment.md) · [版本说明](https://github.com/axixiansheng/emby-edge-panel/releases)
 
+首次安装主控执行 `install-master.sh`，**直接部署新版 Docker 主控，不需要先安装旧版**；已有主控更新才使用 `deploy-docker.sh`。Worker 使用 `install-worker.sh` 部署原生服务，与主控分别安装。
+
 ## 架构
 
 控制面负责账号、额度和配置；数据面负责实际 Emby 转发。视频流量不经过主控，主控短时不可用不会停止 Worker 已加载的转发规则。
