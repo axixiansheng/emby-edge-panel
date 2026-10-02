@@ -1,11 +1,13 @@
 #!/bin/sh
 set -eu
 umask 077
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 [ "$(id -u)" -eq 0 ] || { echo "Run as root" >&2; exit 1; }
 BACKUP=${1:?Usage: sh rollback.sh /opt/emby-backups/upgrade-TIMESTAMP}
 BACKUP=$(readlink -f "$BACKUP")
 case "$BACKUP" in /opt/emby-backups/upgrade-*) ;; *) echo "Invalid backup path" >&2; exit 1 ;; esac
 [ -f "$BACKUP/deployment.tar.gz" ] || { echo "Backup not found" >&2; exit 1; }
+python3 -c 'import argon2' || { echo "Missing legacy password compatibility dependency: python3-argon2" >&2; exit 1; }
 check_operations() {
 python3 - <<'PY'
 import sqlite3
@@ -34,6 +36,7 @@ if [ -f "$BACKUP/previous-image" ]; then
 fi
 [ -f "$BACKUP/emby-panel.service" ] || { echo "Legacy service backup missing" >&2; docker start emby-edge-panel; exit 1; }
 tar -xzf "$BACKUP/deployment.tar.gz" -C /opt emby_panel/app.py emby_panel/frontend
+python3 "$ROOT/tools/prepare_legacy_rollback.py" /opt/emby_panel/app.py "$ROOT/master/security.py"
 tar -xzf "$BACKUP/deployment.tar.gz" -C / etc/nginx
 cp "$BACKUP/emby-panel.service" /etc/systemd/system/emby-panel.service
 systemctl daemon-reload

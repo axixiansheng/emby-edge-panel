@@ -34,7 +34,7 @@ function iconButton(icon, title, action, danger=false){const button=element("but
 let toastTimer;
 function toast(text){$("#toast").textContent=text;$("#toast").hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$("#toast").hidden=true,4500);}
 async function api(path, method="GET", body=null){
-  const abort=new AbortController(), timer=setTimeout(()=>abort.abort(),20000);
+  const abort=new AbortController(), timer=setTimeout(()=>abort.abort(),path==="/login"?60000:20000);
   try{
     const response=await fetch("/api"+path,{method,headers:{"Content-Type":"application/json",Authorization:state.token},body:body===null?null:JSON.stringify(body),signal:abort.signal});
     const data=await response.json();

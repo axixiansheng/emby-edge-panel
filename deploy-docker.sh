@@ -6,6 +6,10 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 docker compose version >/dev/null
 [ -s /opt/emby_panel/.env ] || { echo "Run install-master.sh to configure the master first" >&2; exit 1; }
 docker compose -f "$ROOT/compose.yaml" config --quiet
+if ! python3 -c 'import argon2' >/dev/null 2>&1; then
+    # Ensure native rollback can authenticate users created by the new container.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y python3-argon2
+fi
 STAMP=$(date -u +%Y%m%d-%H%M%S)
 BACKUP=/opt/emby-backups/upgrade-$STAMP
 mkdir -p "$BACKUP" /opt/emby_panel/db

@@ -33,6 +33,7 @@ def create_app(config=None, integrations=None, background=True):
         await anyio.to_thread.run_sync(database.initialize)
         app.state.service = Service(settings, database, integrations or Integrations(settings))
         app.state.limiter = anyio.CapacityLimiter(16)
+        app.state.auth_limiter = anyio.CapacityLimiter(8)
         if background and os.environ.get("EMBY_BACKGROUND", "1") != "0":
             app.state.service.start()
         yield
@@ -104,7 +105,8 @@ def create_app(config=None, integrations=None, background=True):
                         return service.admin_action(path, data), 200
                 raise BusinessError("Not found", 404)
 
-            result, status = await anyio.to_thread.run_sync(dispatch, limiter=request.app.state.limiter)
+            limiter = request.app.state.auth_limiter if path == "/login" else request.app.state.limiter
+            result, status = await anyio.to_thread.run_sync(dispatch, limiter=limiter)
         except BusinessError as error:
             result, status = {"msg": str(error)}, error.status
         except sqlite3.OperationalError:

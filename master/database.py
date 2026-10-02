@@ -1,36 +1,48 @@
 import sqlite3
+import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 
 class Database:
     def __init__(self, path):
         self.path = path
+        self.writer = threading.RLock()
+        self.anchor = None
 
     @contextmanager
     def connect(self, write=False):
-        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=5000")
-        connection.execute("PRAGMA foreign_keys=ON")
-        try:
-            if write:
-                connection.execute("BEGIN IMMEDIATE")
-            yield connection
-            if write:
-                connection.commit()
-        except BaseException:
-            if write:
-                connection.rollback()
-            raise
-        finally:
-            connection.close()
+        # Only SQLite transactions use this lock; hashing and network I/O never do.
+        with self.writer if write else nullcontext():
+            connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+            connection.row_factory = sqlite3.Row
+            try:
+                connection.execute("PRAGMA busy_timeout=10000")
+                connection.execute("PRAGMA foreign_keys=ON")
+                if write:
+                    connection.execute("BEGIN IMMEDIATE")
+                yield connection
+                if write:
+                    connection.commit()
+            except BaseException:
+                if write:
+                    connection.rollback()
+                raise
+            finally:
+                connection.close()
+
+    def close(self):
+        if self.anchor is not None:
+            self.anchor.close()
+            self.anchor = None
 
     def initialize(self):
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as db:
-            db.execute("PRAGMA journal_mode=WAL")
+        self.close()
+        # Keep WAL open between requests instead of checkpointing on the last close.
+        self.anchor = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
+        self.anchor.execute("PRAGMA journal_mode=WAL")
         with self.connect(write=True) as db:
             for statement in (
                 "CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY,password_hash TEXT,expire_time REAL,route_limit INTEGER DEFAULT 3)",

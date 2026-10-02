@@ -2,10 +2,15 @@ import hashlib
 import hmac
 import ipaddress
 import re
-import secrets
 import socket
+import threading
 from urllib.parse import urlsplit
 
+from argon2 import PasswordHasher
+from argon2.exceptions import Argon2Error
+
+PASSWORD_HASHER = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1, hash_len=32, salt_len=16)
+HASH_SLOTS = threading.BoundedSemaphore(2)
 
 class BusinessError(Exception):
     def __init__(self, message, status=400):
@@ -80,14 +85,25 @@ def target_url(value, resolve=False):
 
 
 def password_hash(password):
-    salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 240000).hex()
-    return "pbkdf2_sha256$240000$" + salt + "$" + digest
+    with HASH_SLOTS:
+        return PASSWORD_HASHER.hash(password)
 
 
 def password_verify(password, stored):
+    with HASH_SLOTS:
+        return _password_verify(password, stored)
+
+
+def _password_verify(password, stored):
     if not password or not stored:
         return False
+    if stored.startswith("$argon2id$"):
+        if not re.match(r"^\$argon2id\$v=19\$m=19456,t=2,p=1\$", stored):
+            return False
+        try:
+            return PASSWORD_HASHER.verify(stored, password)
+        except (Argon2Error, ValueError):
+            return False
     if stored.startswith("pbkdf2_sha256$"):
         try:
             _, rounds, salt, digest = stored.split("$")

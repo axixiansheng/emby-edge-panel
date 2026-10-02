@@ -31,6 +31,8 @@ class Service:
         deadline = time.monotonic() + 40
         for thread in self.threads:
             thread.join(timeout=max(0, deadline - time.monotonic()))
+        if not any(thread.is_alive() for thread in self.threads):
+            self.db.close()
 
     def session(self, token):
         with self.db.connect() as db:
@@ -98,7 +100,7 @@ class Service:
                 if record["expire_time"] < now:
                     raise BusinessError("Account expired", 403)
                 name = record["username"]
-                if not record["password_hash"].startswith("pbkdf2_sha256$"):
+                if not record["password_hash"].startswith("$argon2id$"):
                     hashed = password_hash(password)
                     with self.db.connect(write=True) as db:
                         db.execute("UPDATE users SET password_hash=? WHERE username=?", (hashed, name))
