@@ -8,9 +8,10 @@ import re
 import subprocess
 import threading
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
-ENV_FILE = "/opt/emby_agent/.env"
+ENV_FILE = os.environ.get("EMBY_AGENT_ENV_FILE", "/opt/emby_agent/.env")
 URL_MAP = "/etc/nginx/emby_url.map"
 SNI_MAP = "/etc/nginx/emby_sni.map"
 MAX_BODY = 1024 * 1024
@@ -34,8 +35,6 @@ if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY is missing")
 
 file_lock = threading.Lock()
-reload_lock = threading.Lock()
-reload_timer = None
 
 
 def valid_subdomain(value):
@@ -43,16 +42,20 @@ def valid_subdomain(value):
 
 
 def valid_base_domain(value):
-    return bool(re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", value or ""))
+    return len(value or "") <= 253 and all(valid_subdomain(label) for label in (value or "").split("."))
 
 
 def parse_target(value):
-    target = value.strip().rstrip("/")
+    target = value.strip()
+    if not target or len(target) > 2048 or re.search(r'[\s"\'\\;$`{}]', target):
+        raise ValueError("Invalid target")
     if not target.startswith(("http://", "https://")):
         target = "https://" + target
     parsed = urlparse(target)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
         raise ValueError("Invalid target")
+    if parsed.port is not None and not 1 <= parsed.port <= 65535:
+        raise ValueError("Invalid port")
     return target, parsed.hostname
 
 
@@ -66,21 +69,8 @@ def atomic_write(path, lines):
     os.replace(temp_path, path)
 
 
-def reload_nginx():
-    global reload_timer
-    with reload_lock:
-        if reload_timer:
-            reload_timer.cancel()
-        reload_timer = threading.Timer(
-            1.0, subprocess.run, args=(["nginx", "-s", "reload"],),
-            kwargs={"check": False},
-        )
-        reload_timer.daemon = True
-        reload_timer.start()
-
-
 class AgentHandler(http.server.BaseHTTPRequestHandler):
-    server_version = "EmbyWorker/3.0"
+    server_version = "EmbyWorker/3.1"
 
     def address_string(self):
         return self.client_address[0]
@@ -117,7 +107,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             return self.send_json(404, {"ok": False, "error": "Not found"})
         if not self.verify_health_signature():
             return self.send_json(403, {"ok": False, "error": "Signature invalid"})
-        return self.send_json(200, {"ok": True, "version": "3.0", "time": int(time.time())})
+        return self.send_json(200, {"ok": True, "version": "3.1", "time": int(time.time())})
 
     def do_POST(self):
         if self.path != "/api/sync":
@@ -130,6 +120,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             return self.send_json(413, {"ok": False, "error": "Invalid body size"})
         try:
             data = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError()
         except (ValueError, UnicodeDecodeError):
             return self.send_json(400, {"ok": False, "error": "Invalid JSON"})
 
@@ -164,8 +156,9 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             target_url, target_sni = "", ""
 
         with file_lock:
-            url_lines = open(URL_MAP, encoding="utf-8").readlines() if os.path.exists(URL_MAP) else []
-            sni_lines = open(SNI_MAP, encoding="utf-8").readlines() if os.path.exists(SNI_MAP) else []
+            url_lines = Path(URL_MAP).read_text(encoding="utf-8").splitlines(keepends=True) if os.path.exists(URL_MAP) else []
+            sni_lines = Path(SNI_MAP).read_text(encoding="utf-8").splitlines(keepends=True) if os.path.exists(SNI_MAP) else []
+            old_urls, old_sni = list(url_lines), list(sni_lines)
             marker = f'"{full_domain}"'
             url_lines = [line for line in url_lines if marker not in line]
             sni_lines = [line for line in sni_lines if marker not in line]
@@ -174,9 +167,18 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 sni_lines.append(f'    "{full_domain}" "{target_sni}";\n')
             atomic_write(URL_MAP, url_lines)
             atomic_write(SNI_MAP, sni_lines)
-
-        reload_nginx()
-        return self.send_json(200, {"ok": True, "action": action, "domain": full_domain})
+            try:
+                subprocess.run(["nginx", "-t"], check=True, capture_output=True, timeout=10)
+                subprocess.run(["nginx", "-s", "reload"], check=True, capture_output=True, timeout=10)
+            except (subprocess.SubprocessError, OSError):
+                atomic_write(URL_MAP, old_urls)
+                atomic_write(SNI_MAP, old_sni)
+                try:
+                    subprocess.run(["nginx", "-s", "reload"], check=False, capture_output=True, timeout=10)
+                except (subprocess.SubprocessError, OSError):
+                    pass
+                return self.send_json(503, {"ok": False, "error": "Nginx rejected update; previous maps restored"})
+        return self.send_json(200, {"ok": True, "ready": True, "action": action, "domain": full_domain})
 
 
 if __name__ == "__main__":

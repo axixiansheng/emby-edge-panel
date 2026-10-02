@@ -1,0 +1,10 @@
+starlette==1.7.0
+uvicorn==0.54.0
+anyio==4.15.1
+cryptography==50.0.2
+cffi==2.1.1
+click==8.5.0
+h11==0.16.0
+idna==3.20
+pycparser==3.0
+typing_extensions==4.16.0

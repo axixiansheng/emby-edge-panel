@@ -1,0 +1,34 @@
+services:
+  panel:
+    build: .
+    image: emby-edge-panel:2.0.0
+    container_name: emby-edge-panel
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${EMBY_PANEL_PORT:-8080}:8080"
+    env_file:
+      - path: /opt/emby_panel/.env
+        format: raw
+    environment:
+      EMBY_DB_FILE: /data/panel.db
+    volumes:
+      - /opt/emby_panel/db:/data
+      - /etc/letsencrypt/live/emby-edge-wildcard:/etc/letsencrypt/live/emby-edge-wildcard:ro
+      - /etc/letsencrypt/archive/emby-edge-wildcard:/etc/letsencrypt/archive/emby-edge-wildcard:ro
+    user: "${EMBY_UID:-0}:${EMBY_GID:-0}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 192m
+    cpus: 1.0
+    pids_limit: 96
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

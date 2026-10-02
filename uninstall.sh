@@ -31,6 +31,10 @@ cleanup_project_if_unused() {
 
 remove_master() {
     echo '正在彻底移除主控服务...'
+    if command -v docker >/dev/null 2>&1 && docker inspect emby-edge-panel >/dev/null 2>&1; then
+        docker stop --time 45 emby-edge-panel
+        docker rm emby-edge-panel
+    fi
     if command -v systemctl >/dev/null 2>&1; then
         systemctl disable --now emby-panel 2>/dev/null || true
         rm -f /etc/systemd/system/emby-panel.service
@@ -42,12 +46,12 @@ remove_master() {
         [ ! -f /opt/emby_panel/db/panel.db ] || cp -a /opt/emby_panel/db/panel.db* "$save_dir/"
         echo "数据库已保存到 $save_dir"
     fi
-    rm -rf /opt/emby_panel /opt/emby_panel.backup-* /opt/emby_panel.pre-*
+    rm -rf /opt/emby_panel
     rm -f /etc/nginx/sites-enabled/emby-panel /etc/nginx/sites-enabled/emby-panel-http /etc/nginx/sites-enabled/emby-panel-https
     rm -f /etc/nginx/sites-available/emby-panel /etc/nginx/sites-available/emby-panel-http /etc/nginx/sites-available/emby-panel-https
-    rm -f /etc/cron.daily/emby-edge-cert-renew /root/.secrets/emby-cloudflare.ini
-    rm -rf /etc/letsencrypt/live/emby-edge-wildcard /etc/letsencrypt/archive/emby-edge-wildcard
-    rm -f /etc/letsencrypt/renewal/emby-edge-wildcard.conf
+    # Renewal credentials and timer belong to the retained shared certificate.
+    # Other websites may share this wildcard certificate. Never remove it automatically.
+    echo '共享通配符证书和 /opt/emby-backups 回档备份已保留。'
     rm -f /var/log/emby-panel.log /var/log/emby-panel.err
     rmdir /root/.secrets 2>/dev/null || true
     if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then

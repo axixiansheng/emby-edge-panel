@@ -1,6 +1,9 @@
-.env
-*.db
-*.db-shm
-*.db-wal
 __pycache__/
 *.pyc
+.env
+*.db
+*.db-wal
+*.db-shm
+.venv/
+.pytest_cache/
+work/

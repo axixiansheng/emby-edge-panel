@@ -1,126 +1,120 @@
 # Emby Edge Panel
 
-Emby Edge Panel 是一个面向小型社群与私有流媒体服务的多节点反向代理控制平面。项目采用单主控、多 Worker 架构，将 Cloudflare DNS、线路生命周期、节点健康检查、HTTPS 证书分发和 Nginx 动态路由统一到一个轻量化管理界面中。
+面向几十至百来人社群的多节点 Emby 反向代理控制平面。保留单主控、多 Worker、固定用户入口、Cloudflare DNS-only、NAT 公网端口、通配符证书分发及节点热迁移等业务。
 
-## 设计目标
+## v2 架构
 
-- 在 2 核 2 GB 等入门 VPS 上稳定承载数十名用户，并保留继续扩展的空间。
-- 用户只保存一个固定入口；源站变更或节点迁移由主控热更新，无需修改播放器配置。
-- Worker 不保存 Cloudflare 凭据，证书与基础域名由主控集中管理。
-- 同时支持独立公网服务器和 NAT VPS，公网端口完全以服务商的实际映射为准。
-- 避免引入数据库集群、消息队列等高维护组件，保持部署和故障恢复简单可控。
+- 主控：Python 3.12、Starlette、Uvicorn 单进程、SQLite WAL；HTML/CSS/原生 JavaScript，无前端运行时或构建服务。
+- 主控业务拆分为配置、数据库、安全、外部通信、业务服务和 HTTP 接口；页面和 API 由同一容器提供。
+- 注册直接提交短事务：授权码占用、用户创建和会话签发原子完成；密码计算在事务外进行。取消浏览器票据队列和全局 POST 写锁。
+- 线路创建、更新、迁移、删除进入 SQLite 持久化任务，每条线路最多一个活动任务。两个后台执行线程处理外部通信，不占用数据库写事务。
+- 保存 DNS 原始记录和执行阶段；数据库状态与清理阶段原子提交。重启恢复未完成任务，失败自动重试、回退；清理失败不会错误回退已生效的新线路。
+- 迁移先预热新 Worker，再切换 DNS，等待旧 DNS TTL（至少 300 秒）加 60 秒余量后清理旧 Worker。仅修改同节点源站时不会删除新线路。
+- 保留旧数据库表、用户名大小写、密码和未过期会话。旧 SHA256/固定盐 PBKDF2 密码登录成功后升级为随机盐 PBKDF2。
+- 用户端：线路、额度、公告、复制入口、编辑及迁移、任务状态。管理端：线路、节点、用户额度、授权码、任务、公告独立视图。
+- 配置缺失拒绝启动；限制请求体、并发线程、登录尝试和目标地址，避免目标 URL 注入 Nginx 配置。页面采用安全 DOM API 和 CSP。
 
-## 技术架构
+## 主控安装
 
-主控由 Nginx、Python `ThreadingHTTPServer` 和 SQLite WAL 组成。读请求并行处理，注册、授权码签发和线路部署等状态变更进入 FIFO 队列串行提交，降低突发并发下的 SQLite 锁竞争。Cloudflare DNS 使用幂等更新，节点切换遵循“新节点预热、DNS 更新、数据库提交、旧节点清理”的顺序，减少迁移窗口中的服务中断。
-
-Worker 使用 Nginx Stream 的 TLS 预读能力，在同一个内部端口 `12345` 自动区分 HTTP 与 HTTPS。HTTP 和 TLS 请求分别转发到本地反向代理后端，动态 Map 由签名 Agent 原子写入并热重载。主控与 Worker 之间使用 HMAC-SHA256 防止伪造和重放；通配符证书包使用由共享密钥派生的 AES-GCM 密钥加密传输。
-
-证书采用 Cloudflare DNS-01 验证。整个集群共享主控维护的 `BASE_DOMAIN` 通配符证书，Worker 每日自动拉取续期结果，因此新增节点无需填写基础域名、Zone ID、API Token 或证书路径。
-
-## 主要能力
-
-- 用户注册、授权码和可调整线路额度
-- 用户名大小写字母/数字约束与不区分大小写的唯一性控制
-- 自动生成 `用户名-线路缩写` 前缀，例如 `Jack` + `wwj` → `jack-wwj`
-- Cloudflare DNS-only 记录创建、更新与删除
-- 目标源站热更新和跨节点热迁移
-- Worker 心跳、离线熔断与管理端状态展示
-- HTTP/HTTPS 同端口识别、Range 请求和 WebSocket 转发
-- 集群通配符证书集中签发、加密分发和自动续期
-- Alpine/OpenRC 与 Debian/Ubuntu/systemd Worker
-- Debian/Ubuntu/systemd 主控
-- 服务后台运行、开机自启及安装菜单状态检查
-- 独立、彻底的主控和 Worker 卸载流程
-
-## 下载
-
-先用一条命令清理旧目录、创建目录并下载最新版：
+要求 Debian/Ubuntu、已安装 Docker 和 Docker Compose 2.30+、root 权限。Nginx 和 Certbot 留在宿主机，兼容同机其他项目。主控不安装 Redis、数据库服务或 Node.js。配置采用 raw env-file 读取，保留密码及密钥中的 `$` 等字符。
 
 ```sh
-cd ~ && rm -rf emby-edge-panel && mkdir emby-edge-panel && curl -fsSL https://github.com/axixiansheng/emby-edge-panel/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1 -C emby-edge-panel && cd emby-edge-panel
+mkdir -p emby-edge-panel
+curl -fsSL https://github.com/axixiansheng/emby-edge-panel/archive/refs/heads/main.tar.gz |
+  tar -xz --strip-components=1 -C emby-edge-panel
+cd emby-edge-panel
+sudo sh install-master.sh
 ```
 
-随后按服务器角色运行一个安装命令。
+安装器读取 `/opt/emby_panel/.env`，交互配置管理员密码、Cloudflare Token/Zone、基础域名、共享密钥、面板名称和可选面板域名；直接回车保留已有值。
 
-主控：
+容器运行资源限制：192 MB 内存、1 CPU 配额、96 PID、只读根文件系统、删除 Linux capabilities、禁止提权。只在 `127.0.0.1:8080` 发布端口，由宿主机 Nginx 提供 HTTPS。宿主机现有证书目录权限要求容器使用 UID 0，但它没有宿主机管理权限、Docker socket、特权模式或可写证书挂载。
 
-```sh
-sudo ./install-master.sh
-```
-
-Worker：
-
-```sh
-sudo ./install-worker.sh
-```
-
-再次运行安装器会读取现有配置。密码、Token 和共享密钥只显示“已设置”，直接回车即可保留。菜单同时提供服务状态检查。
-
-## 主控配置
-
-主控安装器支持 Debian 和 Ubuntu，交互菜单包括：
-
-- 面板管理员密码
-- Cloudflare API Token
-- Cloudflare Zone ID
-- 集群基础域名
-- Worker 全局共享密钥
-- 面板名称
-- 可选面板访问域名
-
-必填项未完成时安装器会列出缺失内容并拒绝开始。面板域名未配置时使用主控 IP；若 80 端口已有其他默认站点，安装器会提示配置独立面板域名，避免覆盖现有服务。
-
-## Worker 与 NAT 端口
-
-Worker 安装器自动识别 Alpine、Debian 和 Ubuntu。Alpine 使用 OpenRC 与 `/etc/periodic`，Debian/Ubuntu 使用 systemd service/timer；两类系统运行相同的 Agent、证书同步和 Nginx 双协议转发逻辑。安装时只需填写主控公网 IP 和共享密钥。Worker 内部服务端口固定为 `12345`，但公网端口没有任何固定值。
-
-例如服务商控制台提供以下映射：
+数据位置：
 
 ```text
-公网 45678 → 内部 12345
+/opt/emby_panel/.env                 主控配置（不得上传）
+/opt/emby_panel/db/panel.db          原有用户数据库，原路径不变
+/opt/emby-backups/upgrade-*          升级前数据库、部署配置和旧镜像信息
+/etc/letsencrypt/                   宿主机证书与续期配置
 ```
 
-则在主控添加节点时，“线路公网端口”填写 `45678`。如果主控通过同一个映射端口访问 Worker API，“Worker 通信公网端口”也填写 `45678`；若服务商另行映射通信端口，则按控制台实际值分别填写。用户入口会生成：
+生产只运行一个主控进程/副本。不要同时启动多个容器共享同一个数据库：启动恢复逻辑及任务认领按单实例设计。
 
-```text
-https://用户名-线路缩写.基础域名:45678
+## 已安装主控升级
+
+在新的版本目录执行：
+
+```sh
+sudo sh deploy-docker.sh
 ```
 
-公网端口可以是服务商允许的任意端口。SSH 映射端口与 Worker 服务端口无关。
+升级脚本先用 SQLite Backup API 创建一致性备份，再构建镜像，以数据库副本启动不执行后台任务的候选容器。健康检查通过后才停止旧 systemd 主控、切换正式容器，并热重载面板的 Nginx 站点。其他容器和网站不变。首次切换会有短暂面板中断，Worker 的 Emby 转发不依赖主控在线。
 
-## 授权码与线路命名
+候选检查使用自动分配的本机端口，避免与其他服务冲突。候选数据与正式数据库分离；升级脚本不会删除用户数据、清理 Docker 镜像或清理不相关项目。
 
-授权码中间的数字代表注册用户初始线路额度，不再代表有效天数。例如中间数字为 `5`，该用户注册后可创建 5 条线路，管理员之后仍可在用户额度模块修改。
+状态与日志：
 
-用户名仅允许 2–24 位大小写英文字母和数字。线路输入框填写简短英文缩写，例如“哇哇叫”填写 `wwj`。系统会将用户名转为小写并组合为 `jack-wwj`；若完整前缀已存在，系统会要求修改缩写。
+```sh
+docker ps --filter name=emby-edge-panel
+docker logs --tail 100 emby-edge-panel
+curl -fsS http://127.0.0.1:8080/healthz
+```
 
-## 并发策略
+## 回档
 
-面板使用多线程 HTTP 服务处理页面、数据读取和队列查询。注册、授权码签发、线路部署等写操作通过轻量 FIFO 队列有序执行，前端实时展示前方等待人数，并在轮到当前用户时自动提交。该方案针对几十人规模和 2C2G 主控设计，避免额外部署 Redis、数据库代理或负载均衡集群。
+升级前的 GitHub 原代码保留在标签 `backup/pre-refactor-20261003`。服务器每次升级另外保留数据库和部署备份。
 
-## 更新
+```sh
+sudo sh rollback.sh /opt/emby-backups/upgrade-时间戳
+```
 
-重新执行“下载”中的单行命令，再运行对应安装器。安装器会读取已安装配置并备份应用和 Nginx 配置；主控数据库和 Worker 节点标识会保留。
+回档脚本拒绝在有未完成线路任务时回档，防止主控代码与 DNS/Worker 状态不一致。应先在“任务”视图确认任务完成，或修复其上游故障。代码回档保留当前数据库，**不会用升级前的旧数据库覆盖新增用户**。首次从 systemd 升级的备份可恢复旧 systemd 代码、前端和 Nginx；后续 Docker 升级可恢复旧镜像。
+
+数据库灾难恢复与代码回档是两种不同操作。只有在确认可以舍弃备份之后的数据，并停止所有数据库写入时，才能另行恢复数据库备份。
+
+## Worker
+
+```sh
+sudo sh install-worker.sh
+```
+
+支持 Alpine/OpenRC 和 Debian/Ubuntu/systemd，内置 Nginx Stream 在内部 `12345` 区分 HTTP/HTTPS；主控填写服务商实际公网映射端口。比如公网 `45678 → 内部 12345`，线路入口为 `https://用户名-缩写.基础域名:45678`。
+
+Worker 不保存 Cloudflare Token。证书从主控按原 HMAC/AES-GCM 协议获取，由每日同步任务刷新。主控兼容现有 v3.0 Worker；仓库的 v3.1 Worker 增加目标校验、Nginx 配置检测及同步重载确认。Worker 更新与主控更新分别进行，不会自动登录未提供 SSH 信息的节点。
+
+HMAC 的 60 秒时间窗口不是严格的单次 nonce 防重放；线路同步操作设计为幂等。Worker 时钟需准确，共享密钥必须足够随机。目标域名在主控提交时验证公网解析，但不能完全防止后续 DNS 重绑定，应仅发放给可信社群用户。
+
+## 业务规则
+
+- 用户名 2–24 位英文字母或数字，新注册不区分大小写唯一，`admin` 为保留名。
+- 授权码中间数字为初始线路额度，不是有效天数；管理员可设置用户额度为 0–1000，签发授权码额度为 1–1000。
+- 完整线路前缀由小写用户名和缩写组成，比如 `Jack` + `wwj` → `jack-wwj`；前缀保持唯一。
+- 额度计算包括尚未部署完成的创建任务，避免并发超额。下调额度不删除用户已存在的线路。
+- 离线节点不可接收新部署；已有线路不会因短时心跳失败被删除。连续三次健康检查失败标记离线，成功后恢复。
+- DNS 记录必须与受管理线路匹配；发现其他用途的同名记录时拒绝覆盖，不会在回退中误删。
+- 任务提交返回 HTTP 202 和 `operation_id`，通过 `/api/operations/{id}` 查询结果。用户只能查询自己的任务。
+
+## 测试
+
+本地使用 Python 3.10+：
+
+```sh
+python -m venv .venv
+.venv/bin/pip install -r requirements-test.txt
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+测试覆盖并发注册、授权码竞争、大小写兼容、旧密码、额度竞争、线路所有权、同节点更新、跨节点迁移、DNS 回退、清理重试、任务重启恢复、证书协议、HTTP 输入校验和管理员权限。压测与故障测试应使用独立数据库，不要向正式用户数据注入测试账户。
 
 ## 卸载
 
 ```sh
-sudo ./uninstall.sh
+sudo sh uninstall.sh
 ```
 
-卸载器会检测主控和 Worker 是否存在，可分别删除。Worker 卸载会清理 Agent、OpenRC 或 systemd 服务、Nginx Map/Stream 配置、证书、证书同步任务、日志和备份；主控卸载会清理 systemd 服务、面板站点、Cloudflare 凭据、Certbot 续期配置和集群通配符证书。主控和 Worker 都不存在后，卸载器才会删除当前项目目录。
+主控卸载会停止本项目容器，并询问是否备份数据库。升级备份、共享通配符证书及其续期配置保留，避免影响同机其他网站。系统级 Docker/Nginx/Python 不自动卸载。
 
-系统级 Nginx、Python、Certbot 等软件包不会自动删除，以免影响同机其他服务。
+## 依赖与许可
 
-## 安全建议
-
-- Cloudflare Token 仅授予指定 Zone 的 DNS 编辑权限。
-- 使用足够长的随机共享密钥，并确保主控与所有 Worker 保持一致。
-- Worker 系统时间误差必须小于 60 秒；受限 NAT 容器无法运行 Chrony 时由宿主机提供准确时间。
-- Cloudflare 路线记录保持 DNS-only，任意端口不会经过 Cloudflare HTTP 代理。
-- 不要提交 `.env`、数据库、Token、密码、私钥或 SSH 凭据。
-
-## License
-
-MIT
+Python 依赖版本固定于 `requirements.txt`。前端本地打包 Lucide 1.50.0，许可证见 `master/lucide.LICENSE`，运行无需 CDN。项目采用 MIT。
