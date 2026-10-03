@@ -311,7 +311,7 @@ class MasterTests(unittest.TestCase):
     def test_frontend_assets_keep_security_headers_and_closed_allowlist(self):
         app = create_app(self.config, self.remote, background=False)
         with TestClient(app) as client:
-            for name in ("index.html", "panel.js", "panel.css", "lucide.min.js", "edge-mark.svg", "edge-mesh.svg"):
+            for name in ("index.html", "panel.js", "panel.css", "lucide.min.js", "edge-mark.svg", "edge-mesh.svg", "edge-glass.webp"):
                 with self.subTest(asset=name):
                     response = client.get("/assets/" + name)
                     self.assertEqual(200, response.status_code)

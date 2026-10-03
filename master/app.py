@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sqlite3
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -11,7 +12,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from .config import Config
@@ -19,6 +20,7 @@ from .database import Database
 from .integrations import Integrations
 from .security import BusinessError
 from .service import Service
+from .backups import MAX_BACKUP_BYTES, encoded
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("emby-panel")
@@ -34,16 +36,29 @@ def create_app(config=None, integrations=None, background=True):
         app.state.service = Service(settings, database, integrations or Integrations(settings))
         app.state.limiter = anyio.CapacityLimiter(16)
         app.state.auth_limiter = anyio.CapacityLimiter(2)
+        app.state.backup_limiter = anyio.CapacityLimiter(1)
         if background and os.environ.get("EMBY_BACKGROUND", "1") != "0":
             app.state.service.start()
         yield
         await anyio.to_thread.run_sync(app.state.service.close)
 
     async def endpoint(request: Request):
+        if request.method == "POST" and request.url.path.removeprefix("/api").startswith("/admin/backups/"):
+            async with request.app.state.backup_limiter:
+                return await handle_request(request)
+        return await handle_request(request)
+
+    async def handle_request(request: Request):
         service, path = request.app.state.service, request.url.path
         if path.startswith("/api/"):
             path = path[4:]
         try:
+            backup_request = path.startswith("/admin/backups/")
+            token = request.headers.get("authorization", "").removeprefix("Bearer ")
+            if backup_request:
+                session = await anyio.to_thread.run_sync(service.session, token)
+                if session["role"] != "admin":
+                    raise BusinessError("Forbidden", 403)
             if request.method == "POST":
                 origin = request.headers.get("origin")
                 if origin and urlsplit(origin).netloc != request.headers.get("host"):
@@ -51,13 +66,13 @@ def create_app(config=None, integrations=None, background=True):
                 raw = bytearray()
                 async for chunk in request.stream():
                     raw.extend(chunk)
-                    if len(raw) > MAX_BODY:
+                    if len(raw) > (MAX_BACKUP_BYTES + 4096 if backup_request else MAX_BODY):
                         raise BusinessError("Request too large", 413)
                 try:
                     data = json.loads(raw)
                     if not isinstance(data, dict):
                         raise ValueError()
-                except (ValueError, UnicodeDecodeError):
+                except (ValueError, UnicodeDecodeError, RecursionError):
                     raise BusinessError("Invalid JSON object")
             else:
                 data = {}
@@ -66,7 +81,7 @@ def create_app(config=None, integrations=None, background=True):
                 if path == "/healthz" and request.method == "GET":
                     with service.db.connect() as db:
                         db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
-                    return {"ok": True, "version": "2.0.1"}, 200
+                    return {"ok": True, "version": "2.1.0"}, 200
                 if path == "/login" and request.method == "POST":
                     ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
                     return service.login(data, ip), 200
@@ -89,11 +104,24 @@ def create_app(config=None, integrations=None, background=True):
                 if path.startswith("/admin/") and not admin:
                     raise BusinessError("Forbidden", 403)
                 if request.method == "GET":
+                    if path == "/admin/backups/export":
+                        backup = service.backups.export()
+                        name = "emby-edge-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".json"
+                        return Response(encoded(backup), media_type="application/json", headers={"Content-Disposition": 'attachment; filename="' + name + '"', "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}), 200
+                    if path == "/admin/backups/list":
+                        return {"backups": service.backups.saved()}, 200
+                    if path.startswith("/admin/backups/saved/"):
+                        file = service.backups.saved_path(path.rsplit("/", 1)[-1])
+                        return FileResponse(file, media_type="application/json", filename=file.name, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}), 200
                     if (path == "/admin/data" and admin) or (path == "/user/data" and not admin):
                         return service.data(session), 200
                     if path.startswith("/operations/"):
                         return service.operation(path.rsplit("/", 1)[1], session), 200
                 if request.method == "POST":
+                    if path == "/admin/backups/preview":
+                        return service.backups.preview(data.get("backup"), token), 200
+                    if path == "/admin/backups/restore":
+                        return service.backups.restore(data, token), 200
                     routes = {
                         "/user/add_route": "add", "/user/update_route": "update",
                         "/admin/update_route": "update", "/user/delete_route": "delete",
@@ -106,7 +134,11 @@ def create_app(config=None, integrations=None, background=True):
                 raise BusinessError("Not found", 404)
 
             limiter = request.app.state.auth_limiter if path == "/login" else request.app.state.limiter
-            result, status = await anyio.to_thread.run_sync(dispatch, limiter=limiter)
+            def guarded_dispatch():
+                with service.gate.enter(exclusive=path == "/admin/backups/restore"):
+                    return dispatch()
+
+            result, status = await anyio.to_thread.run_sync(guarded_dispatch, limiter=limiter)
         except BusinessError as error:
             result, status = {"msg": str(error)}, error.status
         except sqlite3.OperationalError:
@@ -115,11 +147,13 @@ def create_app(config=None, integrations=None, background=True):
         except Exception:
             logger.exception("request-error")
             result, status = {"msg": "Internal error; check master logs"}, 500
+        if isinstance(result, Response):
+            return result
         return JSONResponse(result, status, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
     async def frontend(request):
         name = request.path_params.get("file", "index.html")
-        if name not in {"index.html", "panel.js", "panel.css", "lucide.min.js", "edge-mark.svg", "edge-mesh.svg"}:
+        if name not in {"index.html", "panel.js", "panel.css", "lucide.min.js", "edge-mark.svg", "edge-mesh.svg", "edge-glass.webp"}:
             return JSONResponse({"msg": "Not found"}, 404)
         return FileResponse(Path(__file__).parent / name, headers={
             "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff",

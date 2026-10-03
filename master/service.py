@@ -8,6 +8,7 @@ import threading
 import time
 
 from .security import BusinessError, hostname, integer, password_hash, password_verify, subdomain, target_url, text, username
+from .backups import Backups, RequestGate
 
 logger = logging.getLogger("emby-panel")
 
@@ -18,6 +19,8 @@ class Service:
         self.stop, self.wake = threading.Event(), threading.Event()
         self.threads, self.failures = [], {}
         self.login_lock = threading.Lock()
+        self.gate = RequestGate()
+        self.backups = Backups(self)
 
     def start(self):
         for name, target in (("routes-0", self.operation_loop), ("routes-1", self.operation_loop), ("health", self.heartbeat_loop)):
@@ -216,6 +219,8 @@ class Service:
             self.wake.clear()
 
     def execute(self, operation):
+        if operation["action"] == "restore":
+            return self.execute_restore(operation)
         payload = json.loads(operation["payload"])
         action, sub = operation["action"], payload["sub"]
         try:
@@ -292,6 +297,44 @@ class Service:
         with self.db.connect(write=True) as db:
             db.execute("UPDATE operations SET payload=?,updated_at=? WHERE id=?", (json.dumps(payload), time.time(), operation_id))
 
+    def execute_restore(self, operation):
+        payload = json.loads(operation["payload"])
+        node, old, sub = payload["node"], payload["old"], payload["sub"]
+        phase = operation["phase"]
+        try:
+            migrating = node and old and (node["host"], node["port"]) != (old["host"], old["port"])
+            if phase == "apply":
+                if "dns_before" not in payload:
+                    records = self.remote.dns_snapshot(sub)
+                    allowed = {item["host"] for item in (node, old) if item}
+                    if len(records) > 1 or any(record["content"] not in allowed for record in records):
+                        raise BusinessError("Restore DNS conflict; administrator review required", 409)
+                    payload["dns_before"] = records
+                    self.save_payload(operation["id"], payload)
+                if node:
+                    target_url(payload["target"], resolve=True)
+                    self.remote.worker(node, "add", sub, payload["target"])
+                    self.remote.dns(sub, node["host"])
+                else:
+                    self.remote.dns(sub)
+                delay = max([300] + [record.get("ttl", 300) for record in payload["dns_before"]]) + 60 if migrating else 0
+                with self.db.connect(write=True) as db:
+                    db.execute("UPDATE operations SET phase='cleanup',status=?,attempts=0,next_run=?,error='',updated_at=? WHERE id=?",
+                               ("pending" if migrating else "running", time.time() + delay, time.time(), operation["id"]))
+                phase = "cleanup"
+                operation["attempts"] = 0
+                if migrating:
+                    return
+            if old and (not node or migrating):
+                self.remote.worker(old, "delete", sub, "")
+            self.finish(operation["id"], "succeeded")
+        except Exception as error:
+            attempts = operation["attempts"] + 1
+            logger.warning("restore-task-failed id=%s phase=%s error=%s", operation["id"], phase, error)
+            with self.db.connect(write=True) as db:
+                db.execute("UPDATE operations SET status='pending',phase=?,attempts=?,next_run=?,error=?,updated_at=? WHERE id=?",
+                           (phase, attempts, time.time() + min(300, 2 ** min(attempts, 8)), str(error)[:300], time.time(), operation["id"]))
+
     def finish(self, operation_id, status, error=""):
         with self.db.connect(write=True) as db:
             db.execute("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=?", (status, error, time.time(), operation_id))
@@ -315,7 +358,8 @@ class Service:
                         online = 0 if failures[node["id"]] >= 3 else node["is_online"]
                     if online != node["is_online"]:
                         with self.db.connect(write=True) as db:
-                            db.execute("UPDATE nodes SET is_online=? WHERE id=?", (online, node["id"]))
+                            db.execute("UPDATE nodes SET is_online=? WHERE id=? AND host=? AND port=? AND secret_key=?",
+                                       (online, node["id"], node["host"], node["port"], node["secret_key"]))
                 with self.db.connect(write=True) as db:
                     db.execute("DELETE FROM sessions WHERE expire_time<?", (time.time(),))
                     db.execute("DELETE FROM operation_logs WHERE created_at<?", (time.time() - 90 * 86400,))
@@ -384,6 +428,7 @@ class Service:
                     ("" if admin else " WHERE username=?") + " ORDER BY created_at DESC LIMIT 100", params)],
             }
             if admin:
+                result["active_tasks"] = db.execute("SELECT COUNT(*) FROM operations WHERE status IN ('pending','running')").fetchone()[0]
                 result["codes"] = [dict(row) for row in db.execute("SELECT code,route_limit AS dur,is_used AS used,bound_user AS user FROM auth_codes ORDER BY is_used,code")]
                 result["users"] = [{**dict(row), "expire": time.strftime("%Y-%m-%d", time.localtime(row["expire_time"]))}
                                    for row in db.execute("""SELECT u.username,u.expire_time,u.route_limit,COUNT(r.id) AS route_count

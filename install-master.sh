@@ -195,6 +195,7 @@ server {
     listen 80;
     listen [::]:80;
     server_name ${PANEL_DOMAIN:-_} emby-worker-bootstrap;
+    client_max_body_size 9m;
     port_in_redirect off;
     server_name_in_redirect off;
     location / {
@@ -220,6 +221,7 @@ server {
     listen 443 ssl;
     listen [::]:443 ssl;
     server_name $PANEL_DOMAIN;
+    client_max_body_size 9m;
     ssl_certificate /etc/letsencrypt/live/emby-edge-wildcard/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/emby-edge-wildcard/privkey.pem;
     location / {

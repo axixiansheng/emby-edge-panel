@@ -57,9 +57,11 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do
 done
 [ "$ready" -eq 1 ] || { docker logs "$CANDIDATE"; exit 1; }
 curl -fsS "http://127.0.0.1:$PORT/assets/panel.js" >/dev/null
+docker exec "$CANDIDATE" python -c 'from master.config import Config; from master.database import Database; from master.service import Service; from master.integrations import Integrations; c=Config.load(); s=Service(c,Database(c.db_file),Integrations(c)); b=s.backups.export(); s.backups.validate(b); print("Portable backup validation passed:", {k:len(v) for k,v in b["data"].items()})'
 cleanup
 
 python3 - <<'PY'
+import re
 from pathlib import Path
 old = """        alias /opt/emby_panel/frontend/;
         index index.html;
@@ -75,7 +77,12 @@ for name in ("emby-panel", "emby-panel-https"):
         content = path.read_text()
         if "alias /opt/emby_panel/frontend/" in content and old not in content:
             raise SystemExit("Unrecognized panel Nginx layout; review before deploying")
-        path.write_text(content.replace(old, new))
+        content = content.replace(old, new)
+        if "client_max_body_size" in content:
+            content = re.sub(r"client_max_body_size\s+[^;]+;", "client_max_body_size 9m;", content)
+        else:
+            content = re.sub(r"(server_name\s+[^;]+;)", r"\1\n    client_max_body_size 9m;", content)
+        path.write_text(content)
 PY
 restore_nginx() {
     python3 "$ROOT/tools/restore_panel_nginx.py" "$BACKUP/deployment.tar.gz"
@@ -90,7 +97,7 @@ rollback() {
     if [ -f "$BACKUP/previous-image" ]; then
         previous_image=$(docker compose -f "$BACKUP/compose.yaml" config --images)
         docker tag "$(cat "$BACKUP/previous-image")" "$previous_image"
-        docker compose -f "$ROOT/compose.yaml" up -d --no-build
+        docker compose -f "$BACKUP/compose.yaml" up -d --no-build
     elif [ "$legacy" -eq 1 ]; then
         systemctl enable --now emby-panel
     fi

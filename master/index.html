@@ -34,6 +34,7 @@
     <nav id="navigation" aria-label="面板视图"></nav>
     <div class="sidebar-bottom">
       <div class="connection-status"><span class="connection-dot"></span><span id="connection-label">已连接主控</span></div>
+      <div class="sidebar-version"><span>EDGE / CONTROL</span><span>2.1</span></div>
       <div class="account">
         <span class="avatar" id="avatar" aria-hidden="true">A</span>
         <div class="account-details"><strong id="identity"></strong><span id="role-label">用户</span></div>
@@ -66,19 +67,24 @@
         <div><p class="eyebrow" id="page-eyebrow">WORKSPACE</p><h1 id="heading">我的线路</h1><span id="summary" class="muted"></span></div>
         <span class="workspace-tag" id="workspace-tag"><i data-lucide="user-round"></i><span>用户空间</span></span>
       </div>
+      <section id="network-overview" class="network-overview" aria-label="节点连接状态">
+        <div class="network-origin"><span class="network-emblem"><i data-lucide="waypoints"></i></span><div><strong data-panel-name>Emby Edge</strong><span id="network-domain"></span></div><span class="network-label">CONTROL PLANE</span></div>
+        <div class="network-link" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div id="network-nodes" class="network-nodes"></div>
+      </section>
       <section id="metrics" class="metrics" aria-label="概览"></section>
       <aside id="announcement" class="announcement" hidden><i data-lucide="megaphone" aria-hidden="true"></i><div><strong>公告</strong><p id="announcement-text"></p></div></aside>
       <section id="routes-view" class="view" aria-label="线路">
         <div class="section-heading"><div><h2 id="routes-heading">我的线路</h2><span class="section-count" id="route-count">0</span></div></div>
         <div class="toolbar">
           <label class="search"><i data-lucide="search"></i><input id="route-search" type="search" placeholder="搜索线路、源站或用户" aria-label="搜索线路"></label>
-          <div class="toolbar-actions"><select id="route-node-filter" aria-label="筛选节点"><option value="">全部节点</option></select><button type="button" class="primary" id="new-route"><i data-lucide="plus"></i><span>新建线路</span></button></div>
+          <div class="toolbar-actions"><select id="route-node-filter" aria-label="筛选节点"><option value="">全部节点</option></select><div class="layout-control" role="group" aria-label="线路布局"><button type="button" class="icon" data-layout="table" aria-label="列表布局" title="列表布局" aria-pressed="true"><i data-lucide="list"></i></button><button type="button" class="icon" data-layout="grid" aria-label="网格布局" title="网格布局" aria-pressed="false"><i data-lucide="layout-grid"></i></button></div><button type="button" class="primary" id="new-route"><i data-lucide="plus"></i><span>新建线路</span></button></div>
         </div>
         <div class="table-scroll"><table><thead id="route-head"></thead><tbody id="route-body"></tbody></table><div id="route-empty" class="empty" hidden><span class="empty-symbol"><i data-lucide="route"></i></span><p>暂无线路</p></div></div>
       </section>
       <section id="nodes-view" class="view" aria-label="节点" hidden>
         <div class="toolbar section-heading"><div><h2>节点管理</h2><span class="section-count" id="node-count">0</span></div><button type="button" class="primary" id="new-node"><i data-lucide="plus"></i>添加节点</button></div>
-        <div class="table-scroll"><table><thead><tr><th>名称</th><th>通信地址</th><th>公网端口</th><th>状态</th><th>操作</th></tr></thead><tbody id="node-body"></tbody></table><div id="node-empty" class="empty" hidden><span class="empty-symbol"><i data-lucide="server"></i></span><p>暂无节点</p></div></div>
+        <div id="node-body" class="node-grid"></div><div id="node-empty" class="empty" hidden><span class="empty-symbol"><i data-lucide="server"></i></span><p>暂无节点</p></div>
       </section>
       <section id="users-view" class="view" aria-label="用户" hidden>
         <div class="section-heading"><div><h2>用户管理</h2><span class="section-count" id="user-count">0</span></div></div>
@@ -102,6 +108,36 @@
           <label>公告内容<textarea name="text" rows="8" maxlength="10000"></textarea></label>
           <div class="settings-actions"><span class="muted" id="announcement-count">0 / 10000</span><button type="submit" class="primary"><i data-lucide="send"></i>发布公告</button></div>
         </form>
+      </section>
+      <section id="backups-view" class="view" aria-label="数据备份" hidden>
+        <div class="section-heading"><div><h2>数据备份与恢复</h2><span class="section-label">DATA VAULT</span></div><span class="badge available"><i data-lucide="shield-check"></i>管理员专属</span></div>
+        <div class="backup-tools">
+          <section class="backup-tool export-tool" aria-labelledby="export-heading">
+            <div class="tool-heading"><span class="tool-emblem"><i data-lucide="database-backup"></i></span><span class="tool-number">01</span></div>
+            <h3 id="export-heading">保存当前数据</h3>
+            <p class="tool-description">用户、密码哈希、额度、授权码、节点密钥、线路与公告。</p>
+            <div id="backup-current-counts" class="backup-current-counts"></div>
+            <button type="button" class="primary" id="export-backup"><i data-lucide="download"></i>导出数据</button>
+          </section>
+          <section class="backup-tool import-tool" aria-labelledby="import-heading">
+            <div class="tool-heading"><span class="tool-emblem"><i data-lucide="archive-restore"></i></span><span class="tool-number">02</span></div>
+            <h3 id="import-heading">恢复已保存的数据</h3>
+            <p class="tool-description">恢复前自动保存当前数据，线路配置随后同步至节点与 DNS。</p>
+            <input id="backup-file" type="file" accept=".json,application/json" hidden aria-label="选择备份文件">
+            <button type="button" id="choose-backup" class="upload-zone"><i data-lucide="file-up"></i><span>选择备份文件</span><small>JSON / 最大 8 MiB</small></button>
+            <p class="error" id="backup-error" role="alert"></p>
+          </section>
+        </div>
+        <p id="backup-busy" class="backup-notice" hidden><i data-lucide="loader-circle"></i><span>线路任务尚未完成，完成后可导出或恢复数据。</span></p>
+        <p class="backup-notice"><i data-lucide="lock-keyhole"></i><span>备份含密码哈希和节点密钥，请私密保存。恢复会覆盖当前业务数据，并使其他登录会话失效。管理员密码、Cloudflare 配置、证书与服务器环境需单独保留。</span></p>
+        <section id="backup-preview" class="backup-preview" hidden>
+          <div class="section-heading"><div><h2>恢复预览</h2><span class="badge available">校验通过</span></div><button type="button" class="icon" id="cancel-backup" title="取消恢复" aria-label="取消恢复"><i data-lucide="x"></i></button></div>
+          <div class="backup-file-info"><i data-lucide="file-json"></i><div><strong id="backup-filename"></strong><p id="backup-date" class="muted"></p></div></div>
+          <div class="table-scroll"><table><thead><tr><th>数据</th><th>当前</th><th>恢复后</th><th>新增</th><th>更新</th><th>移除</th></tr></thead><tbody id="backup-preview-body"></tbody></table></div>
+          <form id="restore-form"><label class="confirm-restore"><input type="checkbox" name="confirm" required><span>确认使用此备份覆盖当前数据</span></label><button type="submit" class="danger" id="restore-backup" disabled><i data-lucide="archive-restore"></i>恢复数据</button></form>
+        </section>
+        <p id="restore-result" class="restore-result" role="status" hidden></p>
+        <section class="saved-backups"><div class="section-heading"><div><h2>恢复前的自动备份</h2><span class="section-count" id="saved-backup-count">0</span></div><button type="button" class="icon" id="refresh-backups" title="刷新备份列表" aria-label="刷新备份列表"><i data-lucide="refresh-cw"></i></button></div><div id="saved-backup-list"></div><p id="saved-backup-empty" class="muted">尚无恢复记录</p></section>
       </section>
       <footer class="workspace-footer"><span>Emby Edge Panel</span><span id="last-updated" role="status"></span></footer>
     </section>
