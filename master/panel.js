@@ -47,7 +47,7 @@ const messages = {
   "Request too large":"文件过大，最大支持 8 MiB",
 };
 const human = text => messages[text] || text;
-function icons(){ if(window.lucide) lucide.createIcons(); }
+function icons(){ $$("i[data-lucide]").forEach(icon=>icon.setAttribute("aria-hidden","true"));if(window.lucide) lucide.createIcons(); }
 function element(tag, text="", cls=""){const node=document.createElement(tag);node.textContent=text;if(cls)node.className=cls;return node;}
 function glyph(name){const node=element("i");node.dataset.lucide=name;node.setAttribute("aria-hidden","true");return node;}
 function iconButton(icon, title, action, danger=false){const button=element("button","","icon"+(danger?" danger-icon":""));button.type="button";button.title=title;button.setAttribute("aria-label",title);const i=element("i");i.dataset.lucide=icon;button.append(i);button.addEventListener("click",action);return button;}
@@ -61,7 +61,7 @@ function toast(text,kind="success"){
 function applyTheme(){
   const dark=themeChoice==="dark" || (themeChoice==="system" && systemTheme.matches);
   document.documentElement.dataset.theme=dark?"dark":"light";
-  $('meta[name="theme-color"]').content=dark?"#151719":"#f7f8fa";
+  $('meta[name="theme-color"]').content=dark?"#161d1b":"#f3f6f5";
   $$("[data-theme-choice]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.themeChoice===themeChoice)));
 }
 $$("[data-theme-choice]").forEach(button=>button.onclick=()=>{
@@ -72,7 +72,8 @@ $$("[data-theme-choice]").forEach(button=>button.onclick=()=>{
 systemTheme.addEventListener("change",applyTheme);
 applyTheme();
 function animateView(node){
-  if(!reducedMotion.matches && node.animate)node.animate([{opacity:0,transform:"translateY(5px)"},{opacity:1,transform:"translateY(0)"}],{duration:200,easing:"ease-out"});
+  node.getAnimations?.().forEach(animation=>animation.cancel());
+  if(!reducedMotion.matches && node.animate)node.animate([{opacity:.5,transform:"translateY(3px)"},{opacity:1,transform:"translateY(0)"}],{duration:160,easing:"cubic-bezier(.2,.8,.2,1)"});
 }
 let tooltipTarget=null;
 function hideTooltip(){
@@ -154,17 +155,17 @@ async function load(silent=false){
     $("#identity").textContent=state.role==="admin"?"管理员":state.data.username;
     $("#role-label").textContent=state.role==="admin"?"管理账户":"用户账户";
     $("#avatar").textContent=state.role==="admin"?"A":state.data.username.slice(0,1).toUpperCase();
-    $("#page-eyebrow").textContent=state.role==="admin"?"CONTROL CENTER":"MY WORKSPACE";
     $("#workspace-label").textContent=state.role==="admin"?"管理控制台":"用户空间";
     $("#summary").textContent=state.role==="admin"?`${state.data.users.length} 位用户 · ${state.data.routes.length} 条线路 · ${state.data.nodes.filter(n=>n.online).length}/${state.data.nodes.length} 节点在线`:`${state.data.routes.length} / ${state.data.route_limit} 条线路 · 有效期 ${state.data.expire}`;
     $("#announcement-text").textContent=state.data.announcement;$("#announcement").hidden=state.view!=="routes" || !state.data.announcement;
     $("#new-route").hidden=state.role==="admin";
+    $("#route-search").placeholder=state.role==="admin"?"搜索线路、源站或用户":"搜索线路或源站";
     $("#connection-label").textContent="已连接主控";$(".connection-status").classList.remove("stale");
     const key=JSON.stringify(state.data);
     if(key!==state.dataKey){
       hideTooltip();
       $("#workspace-tag").replaceChildren(glyph(state.role==="admin"?"shield-check":"user-round"),element("span",state.role==="admin"?"管理空间":"用户空间"));
-      state.dataKey=key;renderMetrics();renderNetwork();renderNodeFilter();renderNavigation();renderRoutes();renderNodes();renderUsers();renderCodes();renderOperations();renderBackupStatus();
+      state.dataKey=key;applyLayout();renderMetrics();renderNetwork();renderNodeFilter();renderNavigation();renderRoutes();renderNodes();renderUsers();renderCodes();renderOperations();renderBackupStatus();
       if(document.activeElement!==$('[name="text"]',$("#announcement-form"))) $('[name="text"]',$("#announcement-form")).value=state.data.announcement;
       announcementCount();icons();
     }
@@ -193,13 +194,13 @@ function renderMetrics(){
   $("#metrics").replaceChildren(...entries.map(([icon,title,value,unit,cls])=>{
     const metric=element("div","","metric "+cls),label=element("div","","metric-label"),number=element("div",String(value),"metric-value");
     label.append(glyph(icon),element("span",title));if(unit)number.append(element("span",unit,"metric-unit"));
-    const index=entries.findIndex(entry=>entry[1]===title);
-    metric.append(label,number,element("span",String(index+1).padStart(2,"0"),"metric-index"));return metric;
+    metric.append(label,number);return metric;
   }));
 }
 function renderNetwork(){
   $("#network-domain").textContent=state.data.base_domain;
   const nodes=state.data.nodes;
+  $("#network-overview").classList.toggle("disconnected",!nodes.some(node=>node.online));
   $("#network-nodes").replaceChildren(...nodes.slice(0,3).map(node=>{
     const item=element("div","","network-node"+(node.online?" online":" offline")),name=element("div","","network-node-copy");
     const count=state.data.routes.filter(route=>route.node_id===node.id).length;
@@ -225,7 +226,7 @@ function renderNavigation(){
       const button=element("button");button.type="button";button.dataset.view=key;button.id="nav-"+key;
       button.setAttribute("role","tab");button.setAttribute("aria-label",title);button.setAttribute("aria-controls",key+"-view");
       button.append(glyph(viewIcons[key]),element("span",title),element("span","","nav-count"));$(".nav-count",button).setAttribute("aria-hidden","true");
-      button.onclick=()=>{if(state.view===key)return;state.view=key;renderNavigation();animateView($("#"+key+"-view"));hideTooltip();if(key==="backups")loadSavedBackups().catch(e=>toast(e.message,"error"));};
+      button.onclick=()=>{if(state.view===key)return;state.view=key;renderNavigation();animateView($("#"+key+"-view"));hideTooltip();if(window.matchMedia("(max-width:760px)").matches)button.scrollIntoView({block:"nearest",inline:"nearest",behavior:reducedMotion.matches?"instant":"smooth"});if(key==="backups")loadSavedBackups().catch(e=>toast(e.message,"error"));};
       return button;
     }));
   }
@@ -240,7 +241,7 @@ function renderNavigation(){
   $("#announcement").hidden=state.view!=="routes" || !state.data.announcement;
   const heading=state.view==="routes"?(state.role==="admin"?"线路管理":"我的线路"):({nodes:"节点管理",users:"用户管理",codes:"授权码",operations:"线路任务",settings:"公告管理",backups:"数据备份"}[state.view]);
   $("#heading").textContent=heading;$("#current-view").textContent=viewNames[state.view];
-  $("#routes-heading").textContent=state.role==="admin"?"全部线路":"我的线路";
+  $("#routes-heading").textContent=state.role==="admin"?"全部线路":"线路入口";
   $$(".view").forEach(view=>{view.setAttribute("role","tabpanel");view.setAttribute("aria-labelledby","nav-"+view.id.replace("-view",""));});
   icons();
 }
@@ -267,7 +268,7 @@ function renderRoutes(){
     const row=element("tr"), first=cell(row,""),name=element("div","","route-name mono");
     name.append(glyph("route"),element("span",route.subdomain));first.append(name);
     const url=`https://${route.subdomain}.${state.data.base_domain}:${route.node_port}`;
-    first.append(element("div",url,"cell-sub mono"));
+    const entry=element("a","","cell-sub route-entry");entry.href=url;entry.target="_blank";entry.rel="noopener noreferrer";entry.title="打开线路入口";entry.setAttribute("aria-label","打开 "+route.subdomain+" 线路入口");entry.setAttribute("translate","no");entry.append(element("span",url),glyph("arrow-up-right"));first.append(entry);
     if(admin){const user=element("div","","user-cell");user.append(element("span",String(route.user || "").slice(0,1).toUpperCase(),"avatar"),element("span",route.user));cell(row,"","","用户").append(user);}
     const nodeName=element("div","","node-name");nodeName.append(glyph("server"),element("span",route.node_name || "节点缺失"));cell(row,"","","节点").append(nodeName);
     cell(row,route.target,"mono","源站");
@@ -296,7 +297,7 @@ function renderNodes(){
     head.append(emblem,status(node.online?"online":"offline"));
     const ports=element("dl","","node-ports");
     for(const [title,value] of [["通信地址",`${node.host}:${node.port}`],["公网端口",node.public_port || node.port],["关联线路",state.data.routes.filter(route=>route.node_id===node.id).length]]){ports.append(element("dt",title),element("dd",String(value),"mono"));}
-    const footer=element("div","","node-tile-footer");footer.append(element("span","NODE "+String(node.id).padStart(2,"0")),iconButton("trash-2","删除节点",()=>confirmDelete("删除节点",node.name,async()=>{await api("/admin/delete_node","POST",{id:node.id});await load();}),true));
+    const footer=element("div","","node-tile-footer");footer.append(element("span","节点 #"+node.id),iconButton("trash-2","删除节点",()=>confirmDelete("删除节点",node.name,async()=>{await api("/admin/delete_node","POST",{id:node.id});await load();}),true));
     item.append(head,element("h3",node.name),ports,footer);return item;
   }));$("#node-empty").hidden=state.data.nodes.length>0;
 }
@@ -395,9 +396,9 @@ $("#restore-form").onsubmit=event=>{
     finally{backupWorking=false;renderBackupStatus();}
   });
 };
-let routeLayout="table";
-try{routeLayout=localStorage.getItem("emby_route_layout") || "table";}catch{}
-function applyLayout(){if(!["table","grid"].includes(routeLayout))routeLayout="table";$("#routes-view").dataset.layout=routeLayout;$$("[data-layout]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.layout===routeLayout)));}
+let routeLayout="auto";
+try{routeLayout=localStorage.getItem("emby_route_layout") || "auto";}catch{}
+function applyLayout(){const layout=["table","grid"].includes(routeLayout)?routeLayout:state.role==="admin"?"table":"grid";$("#routes-view").dataset.layout=layout;$$("[data-layout]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.layout===layout)));}
 $$("[data-layout]").forEach(button=>button.onclick=()=>{routeLayout=button.dataset.layout;try{localStorage.setItem("emby_route_layout",routeLayout);}catch{}applyLayout();animateView($("#route-body"));});
 applyLayout();
 async function copy(value){
@@ -407,6 +408,7 @@ async function copy(value){
 function openRoute(route=null){
   const form=$("#route-form");form.reset();$(".form-error",form).textContent="";state.editId=route?.id??null;
   $("#route-title").textContent=route?"修改线路":"新建线路";$("#suffix-label").hidden=!!route;
+  $("#route-submit-label").textContent=route?"保存更改":"创建线路";
   form.elements.subdomain.required=!route;
   form.elements.node_id.replaceChildren(...state.data.nodes.map(node=>{const option=element("option",node.name+(node.online?"":" · 离线"));option.value=node.id;option.disabled=!node.online && node.id!==route?.node_id;return option;}));
   if(route){form.elements.node_id.value=route.node_id;form.elements.target.value=route.target;$("#route-preview").textContent=route.subdomain+"."+state.data.base_domain;}

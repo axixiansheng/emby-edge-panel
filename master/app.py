@@ -81,7 +81,7 @@ def create_app(config=None, integrations=None, background=True):
                 if path == "/healthz" and request.method == "GET":
                     with service.db.connect() as db:
                         db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
-                    return {"ok": True, "version": "2.1.0"}, 200
+                    return {"ok": True, "version": "2.1.1"}, 200
                 if path == "/login" and request.method == "POST":
                     ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
                     return service.login(data, ip), 200
@@ -153,7 +153,7 @@ def create_app(config=None, integrations=None, background=True):
 
     async def frontend(request):
         name = request.path_params.get("file", "index.html")
-        if name not in {"index.html", "panel.js", "panel.css", "lucide.min.js", "edge-mark.svg", "edge-mesh.svg", "edge-glass.webp"}:
+        if name not in {"index.html", "panel.js", "panel.css", "lucide.min.js", "edge-mark.svg", "edge-mesh.svg", "edge-glass.webp", "manrope-latin.woff2", "noto-ui.woff2"}:
             return JSONResponse({"msg": "Not found"}, 404)
         return FileResponse(Path(__file__).parent / name, headers={
             "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff",
