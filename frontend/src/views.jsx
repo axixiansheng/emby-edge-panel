@@ -430,20 +430,22 @@ export function UsersView() {
       {!users.length ? (
         <Empty title="没有匹配的用户" icon={Users} />
       ) : (
-        <Table headers={['用户', '有效期', '线路数', '额度']}>
+        <Table className="users-table" headers={['用户', '有效期', '线路数', '额度']}>
           {users.map((u) => (
             <tr key={u.username}>
-              <Cell>
+              <Cell className="user-main">
                 <span className="user-identity">
                   <Avatar name={u.username} />
                   <strong>{u.username}</strong>
                 </span>
               </Cell>
-              <Cell label="有效期">{u.expire}</Cell>
-              <Cell label="线路数">
+              <Cell className="user-expiry" label="有效期">
+                <time dateTime={u.expire}>{u.expire}</time>
+              </Cell>
+              <Cell className="user-count" label="线路数">
                 <strong className="numeric">{u.route_count}</strong>
               </Cell>
-              <Cell label="额度">
+              <Cell className="user-quota" label="额度">
                 <Quota user={u} />
               </Cell>
             </tr>
@@ -584,13 +586,21 @@ export function Operations() {
               <div className="task-content">
                 <div className="task-title">
                   <h3>{o.resource}</h3>
-                  <Status status={o.status} />
                 </div>
-                <p>
-                  {labels[o.action]} · {labels[o.phase]}
-                  {admin ? ' · ' + o.username : ''}
+                <p className={'task-meta' + (!admin ? ' personal' : '')}>
+                  <span className="task-action">{labels[o.action]}</span>
+                  <span className="task-phase">{labels[o.phase]}</span>
+                  {admin && (
+                    <span className="task-owner">
+                      <UserRound size={12} aria-hidden="true" />
+                      {o.username}
+                    </span>
+                  )}
                 </p>
                 {o.error && <p className="task-error">{human(o.error)}</p>}
+              </div>
+              <div className="task-status">
+                <Status status={o.status} />
               </div>
               <time dateTime={new Date(o.updated_at * 1000).toISOString()}>
                 {new Date(o.updated_at * 1000).toLocaleString('zh-CN', { hour12: false })}

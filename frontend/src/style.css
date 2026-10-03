@@ -808,6 +808,16 @@ tbody tr:hover {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.users-table table {
+  min-width: 560px;
+}
+.users-table .user-identity > .avatar {
+  flex: none;
+}
+.users-table .user-identity > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .node-inline {
   display: flex;
   align-items: center;
@@ -1132,13 +1142,16 @@ tbody tr:hover {
   border-top: 1px solid var(--line);
 }
 .task-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: 37px minmax(0, 1fr) auto;
+  grid-template-areas: 'glyph content status' 'glyph content time';
+  column-gap: 20px;
+  row-gap: 8px;
   padding: 24px 0;
   border-bottom: 1px solid var(--line);
 }
 .task-glyph {
+  grid-area: glyph;
   width: 37px;
   height: 37px;
   display: grid;
@@ -1157,7 +1170,7 @@ tbody tr:hover {
   color: var(--danger);
 }
 .task-content {
-  flex: 1;
+  grid-area: content;
   min-width: 0;
 }
 .task-title {
@@ -1168,6 +1181,29 @@ tbody tr:hover {
 }
 .task-title h3 {
   font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.task-status {
+  grid-area: status;
+  justify-self: end;
+}
+.task-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.task-meta > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.task-meta .task-owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.task-owner > svg {
+  flex: none;
 }
 .task-content p {
   font-size: 12px;
@@ -1180,10 +1216,11 @@ tbody tr:hover {
   max-width: 80ch;
 }
 .task-row time {
+  grid-area: time;
+  justify-self: end;
   font-size: 11px;
   color: var(--muted);
-  margin-left: auto;
-  flex: none;
+  text-align: right;
 }
 .announcement-editor {
   max-width: 850px;
@@ -1995,30 +2032,30 @@ tbody tr:hover {
   .route-actions {
     gap: 4px;
   }
-  .table-wrap {
+  .table-wrap:where(:not(.users-table)) {
     overflow: visible;
     border-bottom: 0;
   }
-  table {
+  :where(.table-wrap:not(.users-table)) table {
     display: block;
   }
-  thead {
+  :where(.table-wrap:not(.users-table)) thead {
     display: none;
   }
-  tbody {
+  :where(.table-wrap:not(.users-table)) tbody {
     display: block;
   }
-  tbody tr {
+  :where(.table-wrap:not(.users-table)) tbody tr {
     display: grid;
     gap: 13px;
     padding: 22px 0;
     border-bottom: 1px solid var(--line);
   }
-  tbody tr:hover {
+  :where(.table-wrap:not(.users-table)) tbody tr:hover {
     background: transparent;
   }
-  tbody td,
-  tbody tr:last-child td {
+  :where(.table-wrap:not(.users-table)) tbody td,
+  :where(.table-wrap:not(.users-table)) tbody tr:last-child td {
     display: block;
     border: 0;
     width: auto;
@@ -2026,15 +2063,15 @@ tbody tr:hover {
     min-width: 0;
     padding: 0;
   }
-  tbody tr td[data-label],
-  tbody tr:last-child td[data-label] {
+  :where(.table-wrap:not(.users-table)) tbody tr td[data-label],
+  :where(.table-wrap:not(.users-table)) tbody tr:last-child td[data-label] {
     display: grid;
     grid-template-columns: 63px minmax(0, 1fr);
     gap: 10px;
     align-items: center;
     font-size: 12px;
   }
-  td[data-label]::before {
+  :where(.table-wrap:not(.users-table)) td[data-label]::before {
     content: attr(data-label);
     color: var(--muted);
     font-size: 11px;
@@ -2091,30 +2128,6 @@ tbody tr:hover {
   }
   .node-details dd {
     font-size: 20px;
-  }
-  .task-row {
-    gap: 12px;
-    flex-wrap: wrap;
-    padding: 21px 0;
-  }
-  .task-glyph {
-    width: 31px;
-    height: 31px;
-  }
-  .task-row time {
-    width: calc(100% - 43px);
-    margin-left: 43px;
-    font-size: 10px;
-    margin-top: -5px;
-  }
-  .task-title {
-    gap: 10px;
-  }
-  .task-content p {
-    font-size: 11px;
-  }
-  .task-title h3 {
-    font-size: 13px;
   }
   .announcement-editor label {
     font-size: 12px;
@@ -2306,6 +2319,145 @@ tbody tr:hover {
   }
   .auth-content {
     pointer-events: auto;
+  }
+}
+@media (max-width: 760px) and (max-aspect-ratio: 3/4) {
+  .users-table {
+    border: 0;
+    overflow: visible;
+  }
+  .users-table table {
+    display: block;
+    min-width: 0;
+  }
+  .users-table thead {
+    display: none;
+  }
+  .users-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+  .users-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(122px, 0.85fr);
+    gap: 16px;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .users-table tbody td {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 7px;
+    min-width: 0;
+    max-width: none;
+    border: 0;
+    padding: 0;
+    font-size: 12px;
+  }
+  .users-table td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .users-table .user-identity {
+    align-items: center;
+    font-size: 14px;
+  }
+  .users-table tbody .user-expiry,
+  .users-table tbody .user-quota {
+    align-items: flex-end;
+    text-align: right;
+  }
+  .users-table tbody .user-count,
+  .users-table tbody .user-quota {
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .users-table .numeric {
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 44px;
+  }
+  .users-table .quota-form {
+    gap: 6px;
+    justify-content: flex-end;
+  }
+  .users-table .quota-form input {
+    width: 64px;
+    height: 44px;
+    text-align: center;
+    font-size: 16px;
+  }
+  .users-table .quota-form .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+  .task-row {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    grid-template-areas: none;
+    gap: 13px 10px;
+    padding: 20px 0;
+    align-items: start;
+  }
+  .task-glyph {
+    grid-area: auto;
+    grid-column: 1;
+    grid-row: 1;
+    width: 32px;
+    height: 32px;
+  }
+  .task-content {
+    display: contents;
+  }
+  .task-title {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+  .task-title h3 {
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .task-status {
+    grid-area: auto;
+    grid-column: 3;
+    grid-row: 1;
+    align-self: center;
+  }
+  .task-row .task-meta {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    column-gap: 18px;
+    margin: 0;
+    font-size: 11px;
+  }
+  .task-meta .task-owner {
+    justify-self: end;
+    text-align: right;
+  }
+  .task-row .task-meta.personal {
+    grid-template-columns: auto auto;
+    justify-content: space-between;
+  }
+  .task-row .task-error {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+  .task-row time {
+    grid-area: auto;
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+    font-size: 10px;
+    text-align: right;
   }
 }
 @media (max-width: 380px) {

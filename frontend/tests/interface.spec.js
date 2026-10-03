@@ -289,3 +289,94 @@ test('lost graphics context stops the loop and retains usable static scene', asy
   await expect(page.locator('.connection-scene')).toHaveAttribute('data-rotation', angle);
   await expect(page.getByRole('button', { name: '进入我的空间' })).toBeEnabled();
 });
+
+test('users and tasks switch only at phone proportions and distribute mobile information', async ({
+  page,
+}) => {
+  await page.route('**/api/admin/data', async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.users.push({
+      username: 'VeryLongMemberName1234567',
+      expire: '2036-12-31',
+      route_count: 48,
+      route_limit: 50,
+    });
+    data.operations = [
+      {
+        id: 'responsive-done',
+        resource: 'averylong-route-name-that-must-wrap',
+        action: 'update',
+        phase: 'cleanup',
+        status: 'succeeded',
+        username: 'VeryLongMemberName1234567',
+        updated_at: 1760000000,
+        error: '',
+      },
+      {
+        id: 'responsive-failed',
+        resource: 'failed-route',
+        action: 'update',
+        phase: 'rollback',
+        status: 'failed',
+        username: 'Tester1',
+        updated_at: 1760000000,
+        error:
+          'A long upstream error that must remain readable without truncation or horizontal overflow.',
+      },
+    ];
+    await route.fulfill({ response, json: data });
+  });
+  await login(page, true);
+  for (const [width, height, phone] of [
+    [1440, 960, false],
+    [700, 500, false],
+    [844, 390, false],
+    [768, 1024, false],
+    [600, 790, false],
+    [600, 800, true],
+    [700, 1050, true],
+    [390, 844, true],
+    [320, 568, true],
+  ]) {
+    await page.setViewportSize({ width, height });
+    await page.getByRole('tab', { name: '用户', exact: true }).click();
+    const row = page.locator('.users-table tbody tr').first();
+    await expect(row).toBeVisible();
+    expect(await row.evaluate((el) => getComputedStyle(el).display)).toBe(
+      phone ? 'grid' : 'table-row',
+    );
+    if (phone) {
+      const main = await row.locator('.user-main').boundingBox();
+      const expiry = await row.locator('.user-expiry').boundingBox();
+      const count = await row.locator('.user-count').boundingBox();
+      const quota = await row.locator('.user-quota').boundingBox();
+      expect(expiry.x).toBeGreaterThan(main.x + main.width - 1);
+      expect(quota.x).toBeGreaterThan(count.x + count.width - 1);
+      expect(
+        await row.locator('.user-quota').evaluate((el) => getComputedStyle(el).alignItems),
+      ).toBe('flex-end');
+      expect(
+        await row.locator('.quota-form button').evaluate((el) => el.getBoundingClientRect().height),
+      ).toBeGreaterThanOrEqual(44);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.getByRole('tab', { name: '任务', exact: true }).click();
+    const task = page.locator('.task-row').first();
+    await expect(task).toBeVisible();
+    expect(await task.locator('.task-content').evaluate((el) => getComputedStyle(el).display)).toBe(
+      phone ? 'contents' : 'block',
+    );
+    const title = await task.locator('.task-title').boundingBox();
+    const status = await task.locator('.task-status').boundingBox();
+    expect(status.x).toBeGreaterThan(title.x + title.width - 1);
+    expect(await task.locator('time').evaluate((el) => getComputedStyle(el).textAlign)).toBe(
+      'right',
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+  }
+});

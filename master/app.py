@@ -87,7 +87,7 @@ def create_app(config=None, integrations=None, background=True):
                 if path == "/healthz" and request.method == "GET":
                     with service.db.connect() as db:
                         db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
-                    return {"ok": True, "version": "2.2.1"}, 200
+                    return {"ok": True, "version": "2.2.2"}, 200
                 if path == "/login" and request.method == "POST":
                     ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
                     return service.login(data, ip), 200

@@ -497,7 +497,7 @@ function App() {
               )}
               <footer className="workspace-footer">
                 <span>
-                  Emby Edge <span className="footer-version">2.2.1</span>
+                  Emby Edge <span className="footer-version">2.2.2</span>
                 </span>
                 <span>
                   {updated
