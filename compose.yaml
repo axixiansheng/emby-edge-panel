@@ -1,7 +1,7 @@
 services:
   panel:
     build: .
-    image: emby-edge-panel:2.1.1
+    image: emby-edge-panel:2.2.0
     container_name: emby-edge-panel
     restart: unless-stopped
     ports:

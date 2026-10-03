@@ -308,6 +308,14 @@ class MasterTests(unittest.TestCase):
             self.assertEqual(403, client.get("/api/admin/data", headers=headers).status_code)
             self.assertEqual(403, client.post("/api/admin/update_announcement", json={"text": "bad"}, headers=headers).status_code)
 
+    def test_public_branding_exposes_only_panel_name(self):
+        app = create_app(self.config, self.remote, background=False)
+        with TestClient(app) as client:
+            response = client.get("/api/public/config")
+            self.assertEqual(200, response.status_code)
+            self.assertEqual({"panel_name": self.config.panel_name}, response.json())
+            self.assertEqual("no-store", response.headers["cache-control"])
+
     def test_frontend_assets_keep_security_headers_and_closed_allowlist(self):
         app = create_app(self.config, self.remote, background=False)
         with TestClient(app) as client:
@@ -323,6 +331,8 @@ class MasterTests(unittest.TestCase):
                         self.assertIn("image/svg+xml", response.headers["content-type"])
             self.assertEqual(404, client.get("/assets/security.py").status_code)
             self.assertEqual(404, client.get("/assets/unknown.svg").status_code)
+            self.assertEqual(404, client.get("/assets/ui/app.py").status_code)
+            self.assertEqual(404, client.get("/assets/not-a-build-chunk.js").status_code)
 
 
 if __name__ == "__main__":

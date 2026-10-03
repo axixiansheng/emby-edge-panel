@@ -81,10 +81,12 @@ def create_app(config=None, integrations=None, background=True):
                 if path == "/healthz" and request.method == "GET":
                     with service.db.connect() as db:
                         db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
-                    return {"ok": True, "version": "2.1.1"}, 200
+                    return {"ok": True, "version": "2.2.0"}, 200
                 if path == "/login" and request.method == "POST":
                     ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
                     return service.login(data, ip), 200
+                if path == "/public/config" and request.method == "GET":
+                    return {"panel_name": service.config.panel_name}, 200
                 if path == "/worker/bootstrap" and request.method == "POST":
                     return service.bootstrap(data), 200
                 # Compatibility for browsers left open during upgrade.
@@ -153,16 +155,21 @@ def create_app(config=None, integrations=None, background=True):
 
     async def frontend(request):
         name = request.path_params.get("file", "index.html")
-        if name not in {"index.html", "panel.js", "panel.css", "lucide.min.js", "edge-mark.svg", "edge-mesh.svg", "edge-glass.webp", "manrope-latin.woff2", "noto-ui.woff2"}:
+        directory = Path(__file__).parent
+        ui = directory / "ui"
+        bundled = {file.name for file in ui.iterdir() if file.is_file() and file.suffix in {".js", ".css"}} if ui.is_dir() else set()
+        if (ui / "index.html").is_file():
+            bundled.add("index.html")
+        if name not in bundled | {"index.html", "panel.js", "panel.css", "lucide.min.js", "edge-mark.svg", "edge-mesh.svg", "edge-glass.webp", "manrope-latin.woff2", "noto-ui.woff2"}:
             return JSONResponse({"msg": "Not found"}, 404)
-        return FileResponse(Path(__file__).parent / name, headers={
+        return FileResponse((ui if name in bundled else directory) / name, headers={
             "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
         })
 
     return Starlette(lifespan=lifespan, middleware=[Middleware(GZipMiddleware, minimum_size=1000)], routes=[
         Route("/", frontend), Route("/panel", frontend), Route("/admin-panel", frontend),
-        Route("/assets/{file}", frontend),
+        Route("/assets/{file:path}", frontend),
         Route("/{path:path}", endpoint, methods=["GET", "POST"]),
     ])
 

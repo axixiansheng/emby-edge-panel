@@ -2,7 +2,7 @@
 
 面向几十至百来人社群的轻量 Emby 多节点反向代理管理工具。提供授权码注册、线路额度、固定域名入口、节点管理、源站修改、节点迁移和统一证书分发，支持小规格 VPS 主控与 NAT Worker。
 
-v2 保留原有业务模型，重点重构并发控制、线路状态一致性和资源使用方式。主控采用 Python 3.12、Starlette、Uvicorn 和 SQLite WAL；前端使用原生 JavaScript，Worker 由 Python Agent 与 Nginx 组成。
+v2 保留原有业务模型，重点重构并发控制、线路状态一致性和资源使用方式。主控采用 Python 3.12、Starlette、Uvicorn 和 SQLite WAL；v2.2 前端采用 React、Vite、Motion 与 Three.js，Worker 由 Python Agent 与 Nginx 组成。
 
 [安装与部署](docs/deployment.md) · [版本说明](https://github.com/axixiansheng/emby-edge-panel/releases)
 
@@ -31,7 +31,7 @@ flowchart LR
 | 存储 | SQLite WAL、短写事务、索引及活动任务唯一约束 |
 | 外部通信 | Cloudflare DNS、Worker 签名请求、证书加密分发 |
 | Worker | Python Agent 管理映射，Nginx 处理 HTTP/HTTPS、WebSocket 和 Range 转发 |
-| 前端 | 用户端与管理端独立视图，原生 JavaScript、响应式布局、本地 Lucide 图标 |
+| 前端 | React 组件与本地构建资源、Motion 状态过渡、按需加载 Three.js、本地 Lucide 图标 |
 
 ## 核心优化
 
@@ -120,11 +120,15 @@ Worker v3.1 在更新映射前校验目标，在 Nginx 配置检查与重载命�
 
 管理端将线路、节点、用户额度、授权码、任务和公告拆为独立视图，便于批量浏览与定位失败任务。两端均使用响应式布局，本地提供静态资源，不依赖第三方 CDN。
 
-v2.1.1 采用浅色导航、玉绿色操作强调与蓝色辅助信息，连接概览与工作区形成清晰层次；统计使用无框排版，避免重复卡片。用户端默认线路网格，管理端默认列表，并保留用户选择。登录页使用本地 WebP 玻璃网络场景。支持浅色、深色及跟随系统的外观；线路可按节点筛选，节点视图集中展示通信地址、公网端口和关联线路。移动端表格转换为带字段标签的紧凑列表。
+v2.2 全面替换前端：顶部导航取代侧栏，银白场景与朱红操作建立独立视觉语言。用户端以非对称线路网格为主，管理端保留紧凑列表，并保留个人布局选择。线路入口可打开、复制、修改和删除，节点、用户、授权码、任务、公告与备份使用各自的工作视图。支持浅色、深色及跟随系统的外观，移动端表格转换为带字段标签的列表。
 
 Manrope 与 Noto Sans SC 的本地 WOFF2 子集改善中英文、数字排版，两份字体合计约 119 KB，无第三方字体请求；动态内容中未包含的汉字使用系统字体。字体采用 SIL Open Font License，授权文件随源码保留。线路入口为可访问链接，图标提供操作名称与键盘焦点提示。
 
-连接概览使用实际节点健康和线路数，不生成模拟流量图。玻璃模糊用于表单和小面积浮层，动效采用 CSS 与原生 Web Animations API，尊重系统的减少动态效果设置，不新增前端运行时或动画框架。后台刷新在数据未变化时保留表格 DOM，避免不必要的重绘与交互打断。
+登录页使用全幅 Three.js 金属线路装置，指针移动可改变观察角度；工作区根据真实节点数量和在线状态生成连接场景，离线节点不显示流动标记。流动方块是连接主题动效，不代表实际播放流量。Motion 处理导航选中、表单、提示与布局反馈，悬停和复制操作有对应状态。
+
+3D 场景按需加载，帧率限制为约 30 FPS，像素倍率限制为桌面 1.5、手机 1；离屏、后台标签和暂停状态停止循环，并尊重系统减少动态效果设置。WebGL 不可用时显示本地图片，业务操作仍可使用。未变化的数据保持组件状态与 DOM，后台刷新不会重置正在输入的表单。
+
+前端在开发机或 CI 构建，产物随源码发布于 `master/ui/`；VPS 仅提供静态文件，不启动 Node.js、SSR 或额外容器。动态资源由实际构建文件白名单提供，CSP 不开放内联脚本或 `eval`。登录前公开接口仅返回面板名称，不暴露服务器配置。
 
 ### 数据备份与恢复
 
@@ -159,6 +163,8 @@ python -m venv .venv
 
 测试与压测应使用独立数据库。注册吞吐、Worker 转发吞吐和视频播放体验属于不同指标，不应互相替代。
 
+前端源码在 `frontend/`。使用 Node.js 22.12+ 与 pnpm 11，运行 `pnpm install --frozen-lockfile`、`pnpm build`；开发预览为 `pnpm dev`，同机需运行主控 API。`pnpm test:ui` 使用临时数据库与模拟节点，覆盖注册、线路操作、额度、授权码、公告、备份恢复、响应式与 Canvas 像素及动画状态，不连接生产 Worker。测试需要 Playwright 浏览器，或通过 `PLAYWRIGHT_EXECUTABLE_PATH` 指定 Chromium/Edge；Python 默认使用项目 `.venv`，可通过 `EMBY_TEST_PYTHON` 指定。
+
 ## 源码结构
 
 ```text
@@ -170,9 +176,10 @@ master/
   integrations.py  DNS、Worker 通信与证书分发
   security.py      密码、参数及目标地址校验
   config.py        配置读取
-  index.html       页面入口
-  panel.js         用户端与管理端交互
-  panel.css        响应式样式
+  ui/              已构建前端资源
+frontend/          React 源码、构建配置与隔离浏览器测试
+  src/             用户端、管理端、交互场景与样式
+  tests/           隔离业务流程和视觉运行测试
 worker/            线路 Agent 与证书同步
 tools/             旧密码回档兼容与面板配置恢复
 tests/             业务、Worker 与回档测试
@@ -180,4 +187,4 @@ tests/             业务、Worker 与回档测试
 
 ## 许可
 
-MIT。第三方 Lucide 图标许可见 `master/lucide.LICENSE`。
+MIT。前端运行时依赖许可汇总于 `master/ui/licenses.txt`，字体许可随字体源码保留。

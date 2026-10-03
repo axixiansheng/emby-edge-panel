@@ -7,3 +7,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 work/
+node_modules/
+frontend/test-results/
+frontend/playwright-report/
