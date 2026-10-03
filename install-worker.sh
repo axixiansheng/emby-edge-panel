@@ -113,7 +113,8 @@ fi
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 AGENT_SOURCE="$SCRIPT_DIR/worker/agent.py"
 CERT_SYNC_SOURCE="$SCRIPT_DIR/worker/cert_sync.py"
-[ -f "$AGENT_SOURCE" ] && [ -f "$CERT_SYNC_SOURCE" ] || { echo "Missing Worker source files" >&2; exit 1; }
+NGINX_CONFIG_SOURCE="$SCRIPT_DIR/worker/configure_nginx.py"
+[ -f "$AGENT_SOURCE" ] && [ -f "$CERT_SYNC_SOURCE" ] && [ -f "$NGINX_CONFIG_SOURCE" ] || { echo "Missing Worker source files" >&2; exit 1; }
 
 if command -v apk >/dev/null 2>&1; then
     WORKER_PLATFORM=alpine
@@ -139,6 +140,7 @@ cp -a /etc/nginx "/etc/nginx.backup-emby-worker-$stamp"
 mkdir -p /opt/emby_agent "$(dirname "$HTTP_CONF")" /etc/nginx/stream.d /etc/ssl/emby
 cp "$AGENT_SOURCE" /opt/emby_agent/agent.py
 cp "$CERT_SYNC_SOURCE" /opt/emby_agent/cert_sync.py
+cp "$NGINX_CONFIG_SOURCE" /opt/emby_agent/configure_nginx.py
 chmod 750 /opt/emby_agent/agent.py
 chmod 750 /opt/emby_agent/cert_sync.py
 touch /etc/nginx/emby_url.map /etc/nginx/emby_sni.map
@@ -257,27 +259,14 @@ server {
 }
 EOF
 
-# Debian requires stream configuration to be nested in a stream{} context.
-# Remove the direct include written by the previous failed Worker installer,
-# then install a marked, removable stream block.
+# Alpine's stream package already supplies a context (and uses a relative include).
+# Resolve active includes before adding anything; repair only our previous additions.
 if [ "$STREAM_INCLUDE_MANAGED" -eq 1 ]; then
-    sed -i '/# Emby Edge managed stream include/{N;N;N;d;}' /etc/nginx/nginx.conf
-    nginx_tmp=$(mktemp)
-    awk 'index($0, "include /etc/nginx/stream.d/*.conf;") == 0' /etc/nginx/nginx.conf > "$nginx_tmp"
-    cat "$nginx_tmp" > /etc/nginx/nginx.conf
-    rm -f "$nginx_tmp"
+    python3 /opt/emby_agent/configure_nginx.py --legacy-marker
+else
+    python3 /opt/emby_agent/configure_nginx.py
 fi
-if ! grep -RqsF 'include /etc/nginx/stream.d/*.conf;' /etc/nginx/nginx.conf /etc/nginx/modules-enabled 2>/dev/null; then
-    cat >> /etc/nginx/nginx.conf <<'EOF'
-
-# Emby Edge managed stream include
-stream {
-    include /etc/nginx/stream.d/*.conf;
-}
-EOF
-    STREAM_INCLUDE_MANAGED=1
-fi
-[ "$STREAM_INCLUDE_MANAGED" -eq 0 ] || touch /opt/emby_agent/.stream_include_added
+rm -f /opt/emby_agent/.stream_include_added
 
 printf 'BASE_DOMAIN="%s"\n' "$BASE_DOMAIN" >> "$WORKER_ENV"
 

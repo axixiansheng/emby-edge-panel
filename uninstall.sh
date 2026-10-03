@@ -63,6 +63,14 @@ remove_worker() {
     echo '正在彻底移除 Worker 服务...'
     stream_include_added=0
     [ ! -f /opt/emby_agent/.stream_include_added ] || stream_include_added=1
+    if [ -f /opt/emby_agent/configure_nginx.py ] && [ -f /etc/nginx/nginx.conf ]; then
+        if [ "$stream_include_added" -eq 1 ]; then
+            python3 /opt/emby_agent/configure_nginx.py --remove --legacy-marker
+        else
+            python3 /opt/emby_agent/configure_nginx.py --remove
+        fi
+        stream_include_added=0
+    fi
     if command -v rc-service >/dev/null 2>&1; then
         rc-service emby-agent stop 2>/dev/null || true
         rc-update del emby-agent default 2>/dev/null || true
