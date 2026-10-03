@@ -11,6 +11,7 @@ from .security import BusinessError, hostname, integer, password_hash, password_
 from .backups import Backups, RequestGate
 
 logger = logging.getLogger("emby-panel")
+SESSION_TTL = 3600
 
 
 class Service:
@@ -37,16 +38,21 @@ class Service:
         if not any(thread.is_alive() for thread in self.threads):
             self.db.close()
 
-    def session(self, token):
-        with self.db.connect() as db:
-            row = db.execute("SELECT username,role FROM sessions WHERE token=? AND expire_time>?", (token, time.time())).fetchone()
+    def session(self, token, activity=False, activity_age=0):
+        with self.db.connect(write=activity) as db:
+            now = time.time()
+            row = db.execute("SELECT username,role,expire_time FROM sessions WHERE token=? AND expire_time>?", (token, now)).fetchone()
             if row is None:
                 raise BusinessError("Session expired", 401)
             if row["role"] == "user":
                 user = db.execute("SELECT expire_time FROM users WHERE username=?", (row["username"],)).fetchone()
-                if user is None or user[0] < time.time():
+                if user is None or user[0] <= now:
                     raise BusinessError("Account expired", 401)
-            return dict(row)
+            result = dict(row)
+            if activity:
+                result["expire_time"] = max(row["expire_time"], now + SESSION_TTL - activity_age)
+                db.execute("UPDATE sessions SET expire_time=? WHERE token=?", (result["expire_time"], token))
+            return result
 
     def login(self, data, client_ip):
         name = username(text(data, "username", 24))
@@ -92,7 +98,7 @@ class Service:
                 raise BusinessError("Username or authorization code conflict", 409)
             with self.login_lock:
                 self.failures.pop(client_ip, None)
-            return {"token": token, "role": role}
+            return {"token": token, "role": role, "expires_at": now + SESSION_TTL, "server_time": now}
         else:
             with self.db.connect() as db:
                 record = db.execute(
@@ -116,12 +122,12 @@ class Service:
             self.failures.pop(client_ip, None)
         with self.db.connect(write=True) as db:
             token = self.new_session(db, name, role, now)
-        return {"token": token, "role": role}
+        return {"token": token, "role": role, "expires_at": now + SESSION_TTL, "server_time": now}
 
     @staticmethod
     def new_session(db, name, role, now):
         token = secrets.token_hex(32)
-        db.execute("INSERT INTO sessions VALUES(?,?,?,?)", (token, name, role, now + 604800))
+        db.execute("INSERT INTO sessions VALUES(?,?,?,?)", (token, name, role, now + SESSION_TTL))
         return token
 
     def bootstrap(self, data):

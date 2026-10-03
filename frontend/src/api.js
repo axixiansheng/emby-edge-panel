@@ -84,6 +84,9 @@ export async function request(path, { token = '', body, signal } = {}) {
       error.status = response.status;
       throw error;
     }
+    const remaining = response.headers.get('X-Emby-Session-Remaining');
+    if (remaining !== null && Number.isFinite(Number(remaining)))
+      dispatchEvent(new CustomEvent('emby-session-expiry', { detail: Number(remaining) }));
     return response;
   } catch (error) {
     if (error.name === 'AbortError' && !signal?.aborted)

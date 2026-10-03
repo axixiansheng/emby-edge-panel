@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import sqlite3
 import time
@@ -19,8 +20,8 @@ from starlette.routing import Route
 from .config import Config
 from .database import Database
 from .integrations import Integrations
-from .security import BusinessError
-from .service import Service
+from .security import BusinessError, integer
+from .service import SESSION_TTL, Service
 from .backups import MAX_BACKUP_BYTES, encoded
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -51,6 +52,7 @@ def create_app(config=None, integrations=None, background=True):
 
     async def handle_request(request: Request):
         service, path = request.app.state.service, request.url.path
+        session_expiry = None
         if path.startswith("/api/"):
             path = path[4:]
         try:
@@ -84,10 +86,11 @@ def create_app(config=None, integrations=None, background=True):
                 data = {}
 
             def dispatch():
+                nonlocal session_expiry
                 if path == "/healthz" and request.method == "GET":
                     with service.db.connect() as db:
                         db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
-                    return {"ok": True, "version": "2.2.2"}, 200
+                    return {"ok": True, "version": "2.2.4"}, 200
                 if path == "/login" and request.method == "POST":
                     ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
                     return service.login(data, ip), 200
@@ -102,12 +105,15 @@ def create_app(config=None, integrations=None, background=True):
                     return {"ticket": "compat", "position": 0}, 200
                 if path == "/queue/status" and request.method == "GET":
                     return {"position": 0, "ready": True}, 200
-                session = service.session(token)
+                activity = path == "/session/activity" and request.method == "POST"
+                age = integer(data.get("age_ms", 0), 0, 60000) / 1000 if activity else 0
+                session = service.session(token, activity=activity, activity_age=age)
+                session_expiry = session["expire_time"]
                 admin = session["role"] == "admin"
                 if path == "/session" and request.method == "GET":
-                    with service.db.connect() as db:
-                        expires = db.execute("SELECT expire_time FROM sessions WHERE token=?", (token,)).fetchone()[0]
-                    return {"role": session["role"], "expires_at": expires}, 200
+                    return {"role": session["role"], "expires_at": session_expiry, "server_time": time.time()}, 200
+                if path == "/session/activity" and request.method == "POST":
+                    return {"role": session["role"], "expires_at": session_expiry, "server_time": time.time()}, 200
                 if path == "/logout" and request.method == "POST":
                     with service.db.connect(write=True) as db:
                         db.execute("DELETE FROM sessions WHERE token=?", (token,))
@@ -161,12 +167,14 @@ def create_app(config=None, integrations=None, background=True):
         if isinstance(result, Response):
             return result
         response = JSONResponse(result, status, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+        if status < 400 and session_expiry is not None and path != "/logout":
+            response.headers["X-Emby-Session-Remaining"] = str(max(0, session_expiry - time.time()))
         secure = request.url.scheme == "https" or (
             bool(service.config.panel_domain) and request.url.hostname == service.config.panel_domain
         )
-        if status == 200 and path in {"/login", "/session"} and result.get("role"):
+        if status == 200 and path in {"/login", "/session", "/session/activity"} and result.get("role"):
             cookie_token = result.get("token", token)
-            lifetime = 604800 if path == "/login" else max(0, int(result["expires_at"] - time.time()))
+            lifetime = min(SESSION_TTL, max(0, math.ceil(result["expires_at"] - time.time())))
             response.set_cookie("emby_session", cookie_token, max_age=lifetime, httponly=True, secure=secure, samesite="lax")
         elif (status == 200 and path == "/logout") or (
             status == 401 and token == request.cookies.get("emby_session")

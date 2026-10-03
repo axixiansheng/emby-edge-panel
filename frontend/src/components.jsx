@@ -4,9 +4,11 @@ import {
   ArrowUpRight,
   Check,
   CheckCheck,
+  Clock3,
   ChevronRight,
   Copy,
   LoaderCircle,
+  Megaphone,
   Plus,
   Route,
   Search,
@@ -140,7 +142,16 @@ export function Avatar({ name }) {
     </span>
   );
 }
-export function Dialog({ title, children, onClose, busy = false, wide = false }) {
+export function Dialog({
+  title,
+  children,
+  onClose,
+  busy = false,
+  wide = false,
+  className = '',
+  closeOnBackdrop = true,
+  descriptionId,
+}) {
   const ref = useRef(null),
     close = useRef(onClose);
   close.current = onClose;
@@ -161,14 +172,15 @@ export function Dialog({ title, children, onClose, busy = false, wide = false })
   return (
     <dialog
       ref={ref}
-      className={wide ? 'dialog wide' : 'dialog'}
+      className={'dialog ' + (wide ? 'wide ' : '') + className}
       aria-labelledby="dialog-title"
+      aria-describedby={descriptionId}
       onCancel={(e) => {
         e.preventDefault();
         attemptClose();
       }}
       onClick={(e) => {
-        if (e.target === ref.current) attemptClose();
+        if (closeOnBackdrop && e.target === ref.current) attemptClose();
       }}
     >
       <motion.div
@@ -184,6 +196,57 @@ export function Dialog({ title, children, onClose, busy = false, wide = false })
         {children}
       </motion.div>
     </dialog>
+  );
+}
+export function LoginAnnouncement({ text }) {
+  const [notice, setNotice] = useState(() => (text?.trim() ? text : null));
+  const [remaining, setRemaining] = useState(3);
+  const deadline = useRef(Infinity);
+  useEffect(() => {
+    if (!notice) return;
+    deadline.current = performance.now() + 3000;
+    const timer = setInterval(() => {
+      const seconds = Math.max(0, Math.ceil((deadline.current - performance.now()) / 1000));
+      setRemaining(seconds);
+      if (seconds === 0) clearInterval(timer);
+    }, 100);
+    return () => clearInterval(timer);
+  }, [notice]);
+  if (!notice) return null;
+  const close = () => {
+    if (performance.now() >= deadline.current) setNotice(null);
+  };
+  return (
+    <Dialog
+      title={
+        <>
+          <Megaphone size={21} aria-hidden="true" />
+          系统公告
+        </>
+      }
+      onClose={close}
+      busy={remaining > 0}
+      closeOnBackdrop={false}
+      className="login-announcement"
+      descriptionId="login-announcement-text"
+    >
+      <div id="login-announcement-text" className="notice-body" tabIndex={0}>
+        {notice}
+      </div>
+      <footer className="notice-footer">
+        <span className={'notice-countdown ' + (remaining === 0 ? 'ready' : '')} role="status">
+          {remaining > 0 ? (
+            <Clock3 size={16} aria-hidden="true" />
+          ) : (
+            <Check size={16} aria-hidden="true" />
+          )}
+          {remaining > 0 ? `${remaining} 秒后可关闭` : '已可关闭'}
+        </span>
+        <Button icon={Check} className="primary" disabled={remaining > 0} onClick={close}>
+          我已知晓
+        </Button>
+      </footer>
+    </Dialog>
   );
 }
 export function ActionForm({

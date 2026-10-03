@@ -68,7 +68,7 @@ class MasterTests(unittest.TestCase):
             cookie = login.headers["set-cookie"]
             self.assertIn("HttpOnly", cookie)
             self.assertIn("SameSite=lax", cookie)
-            self.assertIn("Max-Age=604800", cookie)
+            self.assertIn("Max-Age=3600", cookie)
             state = client.get("/api/session")
             self.assertEqual("admin", state.json()["role"])
             self.assertNotIn("token", state.json())

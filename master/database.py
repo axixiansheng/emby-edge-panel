@@ -85,6 +85,9 @@ class Database:
             db.execute("CREATE INDEX IF NOT EXISTS idx_users_lookup ON users(username COLLATE NOCASE)")
             db.execute("UPDATE operations SET status='pending' WHERE status='running'")
             db.execute("DELETE FROM sessions WHERE expire_time<?", (time.time(),))
+            # Cap legacy seven-day sessions without extending any existing deadline.
+            maximum_expiry = time.time() + 3600
+            db.execute("UPDATE sessions SET expire_time=? WHERE expire_time>?", (maximum_expiry, maximum_expiry))
 
     def audit(self, action, status, detail="", route_id=None):
         with self.connect(write=True) as db:

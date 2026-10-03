@@ -9,6 +9,14 @@ async function login(page, admin = false) {
   await expect(
     page.getByRole('heading', { name: admin ? '线路管理' : '我的线路', exact: true }),
   ).toBeVisible();
+  if (!admin) {
+    const notice = page.getByRole('dialog', { name: '系统公告' });
+    if (await notice.count()) {
+      await expect(notice.getByRole('button', { name: '我已知晓', exact: true })).toBeEnabled();
+      await notice.getByRole('button', { name: '我已知晓', exact: true }).click();
+      await expect(notice).toHaveCount(0);
+    }
+  }
 }
 async function pixels(page) {
   return page
@@ -216,7 +224,8 @@ test('cookie persists across a fresh tab and brand returns to default route card
   );
   const cookie = (await context.cookies()).find((c) => c.name === 'emby_session');
   expect(cookie.httpOnly).toBe(true);
-  expect(cookie.expires).toBeGreaterThan(Date.now() / 1000 + 86400);
+  expect(cookie.expires).toBeGreaterThan(Date.now() / 1000 + 3500);
+  expect(cookie.expires).toBeLessThanOrEqual(Date.now() / 1000 + 3601);
   expect(await page.evaluate(() => sessionStorage.getItem('emby_token'))).toBe(null);
   const other = await context.newPage();
   await other.goto('/');

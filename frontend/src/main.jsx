@@ -27,7 +27,16 @@ import {
   Waypoints,
 } from 'lucide-react';
 import { request } from './api';
-import { Avatar, Button, IconButton, PanelContext, Status, Toaster } from './components';
+import {
+  Avatar,
+  Button,
+  IconButton,
+  LoginAnnouncement,
+  PanelContext,
+  Status,
+  Toaster,
+} from './components';
+import { useIdleSession } from './session';
 import { Backups, Codes, Nodes, Operations, Routes, Settings, UsersView } from './views';
 import './style.css';
 const Scene = lazy(() => import('./Scene'));
@@ -107,7 +116,12 @@ function App() {
       .then((r) => r.json())
       .then((s) => {
         if (!controller.signal.aborted && ['admin', 'user'].includes(s.role)) {
-          setSession({ role: s.role, token: '' });
+          setSession({
+            role: s.role,
+            token: '',
+            expires_at: s.expires_at,
+            server_time: s.server_time,
+          });
           for (const key of ['emby_token', 'emby_role', 'token', 'role'])
             sessionStorage.removeItem(key);
         }
@@ -171,12 +185,18 @@ function App() {
   }, [toast]);
   const clearSession = useCallback(() => {
     abort.current?.abort();
+    sessionRef.current = null;
     setSession(null);
     setData(null);
     setView('routes');
     history.replaceState(null, '', '/');
     for (const key of ['emby_token', 'emby_role', 'token', 'role']) sessionStorage.removeItem(key);
   }, []);
+  const expireSession = useCallback(() => {
+    clearSession();
+    notify('登录状态已过期，请重新登录', 'error');
+  }, [clearSession, notify]);
+  useIdleSession(session, expireSession);
   const response = useCallback(
     async (path, body) => {
       const current = sessionRef.current;
@@ -497,7 +517,7 @@ function App() {
               )}
               <footer className="workspace-footer">
                 <span>
-                  Emby Edge <span className="footer-version">2.2.2</span>
+                  Emby Edge <span className="footer-version">2.2.4</span>
                 </span>
                 <span>
                   {updated
@@ -510,7 +530,12 @@ function App() {
         ) : (
           <Auth
             onLogin={(s) => {
-              setSession({ role: s.role, token: '' });
+              setSession({
+                role: s.role,
+                token: '',
+                expires_at: s.expires_at,
+                server_time: s.server_time,
+              });
               for (const key of ['emby_token', 'emby_role', 'token', 'role'])
                 sessionStorage.removeItem(key);
             }}
@@ -518,6 +543,7 @@ function App() {
             name={name}
           />
         )}
+        {session?.role === 'user' && data && <LoginAnnouncement text={data.announcement} />}
         <Toaster toast={toast} onClose={() => setToast(null)} />
       </PanelContext.Provider>
     </MotionConfig>
