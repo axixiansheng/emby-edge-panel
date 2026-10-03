@@ -9,6 +9,8 @@ export const labels = {
   failed: '已回退',
   apply: '部署',
   cleanup: '清理旧配置',
+  retiring: '清理旧节点',
+  completed: '配置已确认',
   rollback: '回退中',
 };
 const messages = {
@@ -38,6 +40,7 @@ const messages = {
   'Cloudflare DNS update rejected': 'DNS 更新失败，系统将自动重试',
   'Cloudflare DNS deletion rejected': 'DNS 删除失败，系统将自动重试',
   'Cloudflare DNS restore rejected': 'DNS 回退失败，系统将自动重试',
+  'Cloudflare DNS confirmation mismatch': 'DNS 回读暂未一致，系统将自动重试',
   'Worker rejected operation': '节点拒绝了操作，请联系管理员检查',
   'Database temporarily busy; retry shortly': '数据库暂忙，请稍后重试',
   'Internal error; check master logs': '系统内部错误，请联系管理员查看日志',

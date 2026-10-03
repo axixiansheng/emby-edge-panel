@@ -589,15 +589,35 @@ export function Operations() {
                 </div>
                 <p className={'task-meta' + (!admin ? ' personal' : '')}>
                   <span className="task-action">{labels[o.action]}</span>
-                  <span className="task-phase">{labels[o.phase]}</span>
+                  <span
+                    className="task-phase"
+                    title={
+                      o.status === 'succeeded' && o.phase === 'cleanup'
+                        ? '旧节点保留至 ' +
+                          new Date(o.next_run * 1000).toLocaleTimeString('zh-CN', { hour12: false })
+                        : undefined
+                    }
+                  >
+                    {o.status === 'succeeded' && o.phase === 'cleanup'
+                      ? '缓存保护中'
+                      : labels[o.phase]}
+                  </span>
                   {admin && (
                     <span className="task-owner">
                       <UserRound size={12} aria-hidden="true" />
-                      {o.username}
+                      {o.username === 'admin' ? '管理员' : o.username}
+                      {o.owner_username &&
+                        o.owner_username !== o.username &&
+                        ' / ' + o.owner_username}
                     </span>
                   )}
                 </p>
-                {o.error && <p className="task-error">{human(o.error)}</p>}
+                {o.error && (
+                  <p className="task-error">
+                    {o.status === 'succeeded' ? '旧节点清理重试：' : ''}
+                    {human(o.error)}
+                  </p>
+                )}
               </div>
               <div className="task-status">
                 <Status status={o.status} />
@@ -670,6 +690,7 @@ export function Backups() {
     working = useRef(false),
     mounted = useRef(true);
   const blocked = (data.active_tasks || 0) > 0;
+  const restoreBlocked = blocked || (data.cleanup_tasks || 0) > 0;
   useEffect(
     () => () => {
       mounted.current = false;
@@ -748,7 +769,7 @@ export function Backups() {
   }
   async function restore(e) {
     e.preventDefault();
-    if (!confirmed || !backup.current || !confirmation.current || working.current || blocked)
+    if (!confirmed || !backup.current || !confirmation.current || working.current || restoreBlocked)
       return;
     working.current = true;
     setBusy(true);
@@ -783,6 +804,11 @@ export function Backups() {
       {blocked && (
         <p className="notice" role="status">
           有线路任务正在执行，完成后可导出或恢复数据。
+        </p>
+      )}
+      {!blocked && restoreBlocked && (
+        <p className="notice" role="status">
+          数据可正常导出。旧节点缓存保护结束后可恢复备份。
         </p>
       )}
       <div className="backup-workbench">
@@ -919,7 +945,7 @@ export function Backups() {
                 type="checkbox"
                 name="confirm"
                 checked={confirmed}
-                disabled={busy || blocked}
+                disabled={busy || restoreBlocked}
                 onChange={(e) => setConfirmed(e.target.checked)}
               />
               <span>确认使用此备份覆盖当前数据</span>
@@ -929,7 +955,7 @@ export function Backups() {
               type="submit"
               className="danger"
               busy={busy}
-              disabled={blocked || !confirmed}
+              disabled={restoreBlocked || !confirmed}
             >
               恢复数据
             </Button>

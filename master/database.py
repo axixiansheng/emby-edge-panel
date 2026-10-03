@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import threading
 import time
@@ -64,7 +65,9 @@ class Database:
                 "users": {"password_hash": "TEXT", "route_limit": "INTEGER DEFAULT 3"},
                 "auth_codes": {"route_limit": "INTEGER"},
                 "nodes": {"is_online": "INTEGER DEFAULT 1", "public_port": "TEXT"},
+                "operations": {"owner_username": "TEXT NOT NULL DEFAULT ''"},
             }
+            migrate_operations = "owner_username" not in {row["name"] for row in db.execute("PRAGMA table_info(operations)")}
             for table, columns in additions.items():
                 existing = {row["name"] for row in db.execute("PRAGMA table_info(" + table + ")")}
                 for name, definition in columns.items():
@@ -84,6 +87,21 @@ class Database:
             # Duplicate legacy names remain usable; new writes explicitly check NOCASE.
             db.execute("CREATE INDEX IF NOT EXISTS idx_users_lookup ON users(username COLLATE NOCASE)")
             db.execute("UPDATE operations SET status='pending' WHERE status='running'")
+            if migrate_operations:
+                # Legacy completed tasks used 'cleanup' as their final phase.
+                db.execute("UPDATE operations SET phase='completed' WHERE status='succeeded'")
+                for row in db.execute("SELECT * FROM operations").fetchall():
+                    payload = json.loads(row["payload"])
+                    db.execute("UPDATE operations SET owner_username=? WHERE id=?",
+                               (payload.get("username", row["username"]), row["id"]))
+                    if row["status"] in ("pending", "running") and row["phase"] == "cleanup":
+                        migrating = row["action"] == "update" and payload.get("old_node_id") != payload.get("node_id")
+                        if row["action"] == "restore":
+                            node, old = payload.get("node"), payload.get("old")
+                            migrating = node and old and (node["host"], str(node["port"])) != (old["host"], str(old["port"]))
+                        if migrating:
+                            db.execute("UPDATE operations SET status='succeeded',error='' WHERE id=?", (row["id"],))
+            db.execute("UPDATE operations SET phase='cleanup' WHERE status='succeeded' AND phase='retiring'")
             db.execute("DELETE FROM sessions WHERE expire_time<?", (time.time(),))
             # Cap legacy seven-day sessions without extending any existing deadline.
             maximum_expiry = time.time() + 3600

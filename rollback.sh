@@ -13,7 +13,7 @@ python3 - <<'PY'
 import sqlite3
 with sqlite3.connect("file:/opt/emby_panel/db/panel.db?mode=ro", uri=True) as db:
     has_ops = db.execute("SELECT 1 FROM sqlite_master WHERE name='operations'").fetchone()
-    if has_ops and db.execute("SELECT COUNT(*) FROM operations WHERE status IN ('pending','running')").fetchone()[0]:
+    if has_ops and db.execute("SELECT COUNT(*) FROM operations WHERE status IN ('pending','running') OR (status='succeeded' AND phase IN ('cleanup','retiring'))").fetchone()[0]:
         raise SystemExit("Unfinished operations exist; complete or repair them before rolling back.")
 PY
 }

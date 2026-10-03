@@ -75,8 +75,9 @@ class Backups:
         )] for table, columns in TABLES.items()}
 
     @staticmethod
-    def idle(db):
-        if db.execute("SELECT 1 FROM operations WHERE status IN ('pending','running') LIMIT 1").fetchone():
+    def idle(db, restoring=False):
+        if db.execute("SELECT 1 FROM operations WHERE status IN ('pending','running')" +
+                      (" OR (status='succeeded' AND phase IN ('cleanup','retiring'))" if restoring else "") + " LIMIT 1").fetchone():
             raise BusinessError("Wait for all route tasks before backup or restore", 409)
 
     def envelope(self, tables):
@@ -269,7 +270,7 @@ class Backups:
         if not hmac.compare_digest(signature, self.signature(backup["checksum"], fingerprint, expires, token)):
             raise BusinessError("Backup preview expired; validate again", 409)
         with self.db.connect(write=True) as db:
-            self.idle(db)
+            self.idle(db, restoring=True)
             current = self.tables(db)
             if not hmac.compare_digest(fingerprint, self.fingerprint(current)):
                 raise BusinessError("Panel data changed; validate backup again", 409)
@@ -286,8 +287,8 @@ class Backups:
             db.execute("UPDATE nodes SET is_online=0")
             now = time.time()
             for payload in jobs:
-                db.execute("INSERT INTO operations(id,username,action,resource,payload,status,created_at,updated_at) VALUES(?,?,'restore',?,?,'pending',?,?)",
-                           (secrets.token_hex(16), payload["username"], payload["sub"], json.dumps(payload), now, now))
+                db.execute("INSERT INTO operations(id,username,owner_username,action,resource,payload,status,created_at,updated_at) VALUES(?,? ,?,'restore',?,?,'pending',?,?)",
+                           (secrets.token_hex(16), "admin", payload["username"], payload["sub"], json.dumps(payload), now, now))
             db.execute("INSERT INTO operation_logs(action,status,detail,created_at) VALUES('data_restore','succeeded',?,?)", (saved, now))
         self.service.wake.set()
         return {"msg": "Data restored", "safety_backup": saved, "tasks": len(jobs), "counts": {key: len(value) for key, value in tables.items()}}
@@ -301,6 +302,6 @@ class Backups:
         jobs = []
         for sub in sorted(old_routes.keys() | new_routes.keys()):
             old, new = old_routes.get(sub), new_routes.get(sub)
-            jobs.append({"sub": sub, "username": new["username"] if new else "admin", "target": new["target"] if new else "",
+            jobs.append({"sub": sub, "username": new["username"] if new else old["username"], "target": new["target"] if new else "",
                          "node": new_nodes[new["node_id"]] if new else None, "old": old_nodes[old["node_id"]] if old else None})
         return jobs

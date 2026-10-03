@@ -106,6 +106,8 @@ class Integrations:
                 result = self.request(base + "/" + record["id"], method="DELETE", headers=headers)
                 if not result.get("success"):
                     raise RuntimeError("Cloudflare DNS deletion rejected")
+            if self.dns_snapshot(sub):
+                raise RuntimeError("Cloudflare DNS confirmation mismatch")
             return
         try:
             address = ipaddress.ip_address(host)
@@ -115,12 +117,17 @@ class Integrations:
         if len(records) > 1:
             raise RuntimeError("Multiple DNS records exist; administrator review required")
         data = {"type": kind, "name": full_name, "content": host, "proxied": False, "ttl": 120}
+        if records and all(records[0].get(key) == value for key, value in data.items()):
+            return
         result = self.request(
             base + "/" + records[0]["id"] if records else base,
             data, "PUT" if records else "POST", headers,
         )
         if not result.get("success"):
             raise RuntimeError("Cloudflare DNS update rejected")
+        confirmed = self.dns_snapshot(sub)
+        if len(confirmed) != 1 or not all(confirmed[0].get(key) == value for key, value in data.items()):
+            raise RuntimeError("Cloudflare DNS confirmation mismatch")
 
     def certificate(self, node_id):
         if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?", node_id):

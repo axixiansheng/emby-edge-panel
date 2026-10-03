@@ -158,7 +158,11 @@ class BackupTests(unittest.TestCase):
         self.assertIn((1, self.route["subdomain"]), self.fixture.remote.maps)
         self.assertIn((2, self.route["subdomain"]), self.fixture.remote.maps)
         with self.db.connect() as db:
-            self.assertGreater(db.execute("SELECT next_run FROM operations WHERE id=?", (operation_id,)).fetchone()[0], time.time() + 350)
+            self.assertGreater(db.execute("SELECT next_run FROM operations WHERE id=?", (operation_id,)).fetchone()[0], time.time() + 175)
+            self.assertEqual("succeeded", db.execute("SELECT status FROM operations WHERE id=?", (operation_id,)).fetchone()[0])
+        self.assertEqual(1, len(self.backups.export()["data"]["routes"]))
+        with self.assertRaises(BusinessError):
+            self.restore(backup)
         self.fixture.immediate(operation_id)
         self.fixture.run_next()
         self.assertNotIn((1, self.route["subdomain"]), self.fixture.remote.maps)

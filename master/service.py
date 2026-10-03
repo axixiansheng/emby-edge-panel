@@ -20,6 +20,7 @@ class Service:
         self.stop, self.wake = threading.Event(), threading.Event()
         self.threads, self.failures = [], {}
         self.login_lock = threading.Lock()
+        self.route_locks = [threading.Lock() for _ in range(64)]
         self.gate = RequestGate()
         self.backups = Backups(self)
 
@@ -186,8 +187,8 @@ class Service:
                     self.node(db, payload["node_id"])
             try:
                 db.execute(
-                    "INSERT INTO operations(id,username,action,resource,payload,status,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?)",
-                    (operation_id, name, action, sub, json.dumps(payload), now, now),
+                    "INSERT INTO operations(id,username,owner_username,action,resource,payload,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?)",
+                    (operation_id, name, payload["username"], action, sub, json.dumps(payload), now, now),
                 )
             except sqlite3.IntegrityError:
                 raise BusinessError("This route already has an active operation", 409)
@@ -196,21 +197,30 @@ class Service:
 
     def operation(self, operation_id, session):
         with self.db.connect() as db:
-            row = db.execute("SELECT id,username,action,status,phase,attempts,error,created_at,updated_at FROM operations WHERE id=?", (operation_id,)).fetchone()
-        if row is None or (session["role"] != "admin" and row["username"] != session["username"]):
+            row = db.execute("SELECT id,username,owner_username,resource,action,status,phase,attempts,error,next_run,created_at,updated_at FROM operations WHERE id=?", (operation_id,)).fetchone()
+        if row is None or (session["role"] != "admin" and session["username"] not in (row["username"], row["owner_username"])):
             raise BusinessError("Operation not found", 404)
         return dict(row)
 
     def claim(self):
         with self.db.connect() as db:
-            candidate = db.execute("SELECT id FROM operations WHERE status='pending' AND next_run<=? ORDER BY created_at LIMIT 1", (time.time(),)).fetchone()
+            candidate = db.execute("""SELECT id FROM operations WHERE next_run<=? AND
+                (status='pending' OR (status='succeeded' AND phase='cleanup'))
+                ORDER BY status='pending' DESC,created_at LIMIT 1""", (time.time(),)).fetchone()
         if candidate is None:
             return None
         with self.db.connect(write=True) as db:
-            row = db.execute("SELECT * FROM operations WHERE id=? AND status='pending' AND next_run<=?", (candidate[0], time.time())).fetchone()
+            row = db.execute("""SELECT * FROM operations WHERE id=? AND next_run<=? AND
+                (status='pending' OR (status='succeeded' AND phase='cleanup'))""", (candidate[0], time.time())).fetchone()
             if row:
-                db.execute("UPDATE operations SET status='running',updated_at=? WHERE id=?", (time.time(), row["id"]))
-        return dict(row) if row else None
+                if row["status"] == "succeeded":
+                    db.execute("UPDATE operations SET phase='retiring' WHERE id=?", (row["id"],))
+                else:
+                    db.execute("UPDATE operations SET status='running',updated_at=? WHERE id=?", (time.time(), row["id"]))
+        result = dict(row) if row else None
+        if result and result["status"] == "succeeded":
+            result["phase"] = "retiring"
+        return result
 
     def operation_loop(self):
         while not self.stop.is_set():
@@ -225,6 +235,47 @@ class Service:
             self.wake.clear()
 
     def execute(self, operation):
+        # Serialize network writes for the same name, including delayed retirement.
+        lock = self.route_locks[int(hashlib.sha256(operation["resource"].encode()).hexdigest(), 16) % len(self.route_locks)]
+        with lock:
+            if operation["status"] == "succeeded":
+                return self.retire(operation)
+            return self.execute_foreground(operation)
+
+    @staticmethod
+    def retirement_delay(records):
+        return max([0 if records else 300] + [300 if record.get("ttl", 1) == 1 else record.get("ttl", 300) for record in records]) + 60
+
+    def retire(self, operation):
+        payload = json.loads(operation["payload"])
+        sub = operation["resource"]
+        try:
+            with self.db.connect() as db:
+                old = payload["old"] if operation["action"] == "restore" else self.node(db, payload["old_node_id"], require_online=False)
+                current = db.execute("SELECT n.host,n.port FROM routes r JOIN nodes n ON n.id=r.node_id WHERE r.subdomain=?", (sub,)).fetchone()
+                busy = db.execute("SELECT 1 FROM operations WHERE resource=? AND status IN ('pending','running')", (sub,)).fetchone()
+            if current and (current["host"], str(current["port"])) == (old["host"], str(old["port"])):
+                # A -> B -> A: this endpoint is active again, never remove its map.
+                self.complete_retirement(operation["id"])
+                return
+            if busy:
+                with self.db.connect(write=True) as db:
+                    db.execute("UPDATE operations SET phase='cleanup',next_run=? WHERE id=?", (time.time() + 1, operation["id"]))
+                return
+            self.remote.worker(old, "delete", sub, "")
+            self.complete_retirement(operation["id"])
+        except Exception as error:
+            attempts = operation["attempts"] + 1
+            logger.warning("retirement-retry id=%s error=%s", operation["id"], error)
+            with self.db.connect(write=True) as db:
+                db.execute("UPDATE operations SET phase='cleanup',attempts=?,next_run=?,error=? WHERE id=?",
+                           (attempts, time.time() + min(300, 2 ** min(attempts, 8)), str(error)[:300], operation["id"]))
+
+    def complete_retirement(self, operation_id):
+        with self.db.connect(write=True) as db:
+            db.execute("UPDATE operations SET phase='completed',error='',next_run=0 WHERE id=?", (operation_id,))
+
+    def execute_foreground(self, operation):
         if operation["action"] == "restore":
             return self.execute_restore(operation)
         payload = json.loads(operation["payload"])
@@ -251,22 +302,25 @@ class Service:
                         raise BusinessError("DNS name already exists; choose another route prefix", 409)
                     if action != "add" and any(record["content"] != old["host"] for record in records):
                         raise BusinessError("DNS record differs from managed route; administrator review required", 409)
+                    if len(records) > 1:
+                        raise BusinessError("DNS record differs from managed route; administrator review required", 409)
                     payload["dns_before"] = records
                     self.save_payload(operation["id"], payload)
                 if action in ("add", "update"):
                     payload["worker_touched"] = True
                     self.save_payload(operation["id"], payload)
                     self.remote.worker(node, "add", sub, payload["target"])
-                    payload["dns_touched"] = True
-                    self.save_payload(operation["id"], payload)
-                    self.remote.dns(sub, node["host"])
+                    if action == "add" or not payload["dns_before"] or node["host"] != old["host"]:
+                        payload["dns_touched"] = True
+                        self.save_payload(operation["id"], payload)
+                        self.remote.dns(sub, node["host"])
                 else:
                     payload["dns_touched"] = True
                     self.save_payload(operation["id"], payload)
                     self.remote.dns(sub)
                 # Database state and cleanup checkpoint commit atomically.
                 migrating = action == "update" and (node["host"], str(node["port"])) != (old["host"], str(old["port"]))
-                ttl = max([300] + [record.get("ttl", 300) for record in payload["dns_before"]])
+                delay = self.retirement_delay(payload["dns_before"]) if node["host"] != (old or node)["host"] else 0
                 with self.db.connect(write=True) as db:
                     if action == "add":
                         db.execute("INSERT INTO routes(username,subdomain,target,node_id) VALUES(?,?,?,?)",
@@ -277,11 +331,13 @@ class Service:
                         db.execute("DELETE FROM routes WHERE id=?", (payload["id"],))
                     db.execute(
                         "UPDATE operations SET phase='cleanup',attempts=0,status=?,next_run=?,updated_at=? WHERE id=?",
-                        ("pending" if migrating else "running", time.time() + ttl + 60 if migrating else 0, time.time(), operation["id"]),
+                        ("succeeded" if migrating else "running", time.time() + delay if migrating else 0, time.time(), operation["id"]),
                     )
+                    if migrating:
+                        db.execute("UPDATE operations SET error='' WHERE id=?", (operation["id"],))
+                        db.execute("INSERT INTO operation_logs(action,status,detail,created_at) VALUES('route_operation','succeeded',?,?)", (operation["id"], time.time()))
                 operation.update(phase="cleanup", attempts=0)
                 if migrating:
-                    # Keep the old route through DNS TTL plus a propagation margin.
                     return
             if action == "delete":
                 self.remote.worker(node, "delete", sub, "")
@@ -323,10 +379,12 @@ class Service:
                     self.remote.dns(sub, node["host"])
                 else:
                     self.remote.dns(sub)
-                delay = max([300] + [record.get("ttl", 300) for record in payload["dns_before"]]) + 60 if migrating else 0
+                delay = self.retirement_delay(payload["dns_before"]) if migrating and node["host"] != old["host"] else 0
                 with self.db.connect(write=True) as db:
                     db.execute("UPDATE operations SET phase='cleanup',status=?,attempts=0,next_run=?,error='',updated_at=? WHERE id=?",
-                               ("pending" if migrating else "running", time.time() + delay, time.time(), operation["id"]))
+                               ("succeeded" if migrating else "running", time.time() + delay, time.time(), operation["id"]))
+                    if migrating:
+                        db.execute("INSERT INTO operation_logs(action,status,detail,created_at) VALUES('route_operation','succeeded',?,?)", (operation["id"], time.time()))
                 phase = "cleanup"
                 operation["attempts"] = 0
                 if migrating:
@@ -343,7 +401,7 @@ class Service:
 
     def finish(self, operation_id, status, error=""):
         with self.db.connect(write=True) as db:
-            db.execute("UPDATE operations SET status=?,error=?,updated_at=? WHERE id=?", (status, error, time.time(), operation_id))
+            db.execute("UPDATE operations SET status=?,phase=CASE WHEN ?='succeeded' THEN 'completed' ELSE phase END,error=?,updated_at=? WHERE id=?", (status, status, error, time.time(), operation_id))
         self.db.audit("route_operation", status, operation_id)
 
     def heartbeat_loop(self):
@@ -369,7 +427,7 @@ class Service:
                 with self.db.connect(write=True) as db:
                     db.execute("DELETE FROM sessions WHERE expire_time<?", (time.time(),))
                     db.execute("DELETE FROM operation_logs WHERE created_at<?", (time.time() - 90 * 86400,))
-                    db.execute("DELETE FROM operations WHERE status IN ('succeeded','failed') AND updated_at<?", (time.time() - 90 * 86400,))
+                    db.execute("DELETE FROM operations WHERE status IN ('succeeded','failed') AND phase NOT IN ('cleanup','retiring') AND updated_at<?", (time.time() - 90 * 86400,))
             except Exception:
                 logger.exception("health-loop-error")
             self.stop.wait(60)
@@ -397,8 +455,8 @@ class Service:
             with self.db.connect(write=True) as db:
                 if db.execute("SELECT 1 FROM routes WHERE node_id=?", (node_id,)).fetchone():
                     raise BusinessError("Migrate all routes before deleting this node", 409)
-                pending = db.execute("SELECT payload FROM operations WHERE status IN ('pending','running')").fetchall()
-                if any(node_id in (json.loads(row[0]).get("node_id"), json.loads(row[0]).get("old_node_id")) for row in pending):
+                pending = db.execute("SELECT payload FROM operations WHERE status IN ('pending','running') OR (status='succeeded' AND phase IN ('cleanup','retiring'))").fetchall()
+                if any(node_id in (p.get("node_id"), p.get("old_node_id"), (p.get("node") or {}).get("id"), (p.get("old") or {}).get("id")) for p in (json.loads(row[0]) for row in pending)):
                     raise BusinessError("Node has unfinished operations", 409)
                 db.execute("DELETE FROM nodes WHERE id=?", (node_id,))
             return {"msg": "Node removed"}
@@ -430,11 +488,12 @@ class Service:
                 "announcement": announcement[0] if announcement else "", "routes": routes,
                 "nodes": nodes if admin else [{"id": row["id"], "name": row["name"], "online": row["online"]} for row in nodes],
                 "operations": [dict(row) for row in db.execute(
-                    "SELECT id,username,action,resource,status,phase,attempts,error,updated_at FROM operations" +
-                    ("" if admin else " WHERE username=?") + " ORDER BY created_at DESC LIMIT 100", params)],
+                    "SELECT id,username,owner_username,action,resource,status,phase,attempts,error,next_run,updated_at FROM operations" +
+                    ("" if admin else " WHERE username=? OR owner_username=?") + " ORDER BY status IN ('pending','running') DESC,created_at DESC LIMIT 100", () if admin else params * 2)],
             }
             if admin:
                 result["active_tasks"] = db.execute("SELECT COUNT(*) FROM operations WHERE status IN ('pending','running')").fetchone()[0]
+                result["cleanup_tasks"] = db.execute("SELECT COUNT(*) FROM operations WHERE status='succeeded' AND phase IN ('cleanup','retiring')").fetchone()[0]
                 result["codes"] = [dict(row) for row in db.execute("SELECT code,route_limit AS dur,is_used AS used,bound_user AS user FROM auth_codes ORDER BY is_used,code")]
                 result["users"] = [{**dict(row), "expire": time.strftime("%Y-%m-%d", time.localtime(row["expire_time"]))}
                                    for row in db.execute("""SELECT u.username,u.expire_time,u.route_limit,COUNT(r.id) AS route_count

@@ -27,6 +27,7 @@ class FakeRemote:
         self.maps, self.records, self.calls = {}, {}, []
         self.fail_dns = False
         self.fail_delete = False
+        self.dns_calls = []
         self.delay = 0
 
     def worker(self, node, action, sub, target):
@@ -41,6 +42,7 @@ class FakeRemote:
             self.maps.pop((node["id"], sub), None)
 
     def dns(self, sub, host=None):
+        self.dns_calls.append((sub, host))
         if self.fail_dns:
             raise RuntimeError("DNS unavailable")
         if host is None:
@@ -237,14 +239,19 @@ class MasterTests(unittest.TestCase):
         self.assertIn((1, route["subdomain"]), self.remote.maps)
         self.assertIn((2, route["subdomain"]), self.remote.maps)
         self.assertEqual("cleanup", self.service.operation(result["operation_id"], user)["phase"])
+        self.assertEqual("succeeded", self.service.operation(result["operation_id"], user)["status"])
+        with self.db.connect() as db:
+            due = db.execute("SELECT next_run FROM operations WHERE id=?", (result["operation_id"],)).fetchone()[0]
+        self.assertGreater(due, time.time() + 175)
+        self.assertLess(due, time.time() + 181)
         self.immediate(result["operation_id"])
         self.run_next()
         self.assertNotIn((1, route["subdomain"]), self.remote.maps)
         self.assertIn((2, route["subdomain"]), self.remote.maps)
 
-    def test_update_dns_failure_restores_same_node_origin(self):
+    def test_update_dns_failure_restores_old_node_origin(self):
         route, _, user = self.add_route()
-        result = self.service.enqueue("update", {"id": route["id"], "target": "https://1.1.1.1"}, user)
+        result = self.service.enqueue("update", {"id": route["id"], "node_id": 2, "target": "https://1.1.1.1"}, user)
         self.remote.fail_dns = True
         for _ in range(3):
             self.immediate(result["operation_id"])
@@ -253,7 +260,149 @@ class MasterTests(unittest.TestCase):
         self.immediate(result["operation_id"])
         self.run_next()
         self.assertEqual(route["target"], self.remote.maps[(1, route["subdomain"])])
+        self.assertNotIn((2, route["subdomain"]), self.remote.maps)
         self.assertEqual("failed", self.service.operation(result["operation_id"], user)["status"])
+
+    def test_same_node_update_does_not_write_dns(self):
+        route, _, user = self.add_route()
+        self.remote.dns_calls.clear()
+        self.remote.fail_dns = True
+        result = self.service.enqueue("update", {"id": route["id"], "target": "https://1.1.1.1"}, user)
+        self.run_next()
+        self.assertEqual([], self.remote.dns_calls)
+        self.assertEqual("succeeded", self.service.operation(result["operation_id"], user)["status"])
+
+    def test_admin_update_visible_to_owner_but_not_other_users(self):
+        route, _, user = self.add_route()
+        other = self.register("Other")
+        result = self.service.enqueue("update", {"id": route["id"], "node_id": 2}, self.admin)
+        task_id = result["operation_id"]
+        self.assertEqual("admin", self.service.operation(task_id, user)["username"])
+        self.assertIn(task_id, [o["id"] for o in self.service.data(user)["operations"]])
+        self.assertNotIn(task_id, [o["id"] for o in self.service.data(other)["operations"]])
+        with self.assertRaises(BusinessError):
+            self.service.operation(task_id, other)
+        self.run_next()
+        self.assertEqual("succeeded", self.service.operation(task_id, user)["status"])
+        following = self.service.enqueue("update", {"id": route["id"], "target": "https://1.1.1.1"}, user)
+        self.run_next()
+        self.assertEqual("succeeded", self.service.operation(following["operation_id"], self.admin)["status"])
+
+    def test_rapid_return_to_old_node_never_deletes_active_mapping(self):
+        route, _, user = self.add_route()
+        first = self.service.enqueue("update", {"id": route["id"], "node_id": 2}, user)["operation_id"]
+        self.run_next()
+        second = self.service.enqueue("update", {"id": route["id"], "node_id": 1, "target": "https://1.1.1.1"}, user)["operation_id"]
+        self.run_next()
+        self.immediate(first)
+        self.run_next()
+        self.assertEqual("https://1.1.1.1", self.remote.maps[(1, route["subdomain"])])
+        self.immediate(second)
+        self.run_next()
+        self.assertNotIn((2, route["subdomain"]), self.remote.maps)
+
+    def test_retirement_retry_does_not_relock_route_and_recovers_on_restart(self):
+        route, _, user = self.add_route()
+        task = self.service.enqueue("update", {"id": route["id"], "node_id": 2}, user)["operation_id"]
+        self.run_next()
+        with self.assertRaises(BusinessError):
+            self.service.admin_action("/admin/delete_node", {"id": 1})
+        self.immediate(task)
+        claimed = self.service.claim()
+        self.assertEqual("retiring", claimed["phase"])
+        self.db.initialize()
+        self.remote.fail_delete = True
+        self.run_next()
+        self.assertEqual("succeeded", self.service.operation(task, user)["status"])
+        self.assertEqual("cleanup", self.service.operation(task, user)["phase"])
+        self.remote.fail_delete = False
+        following = self.service.enqueue("update", {"id": route["id"], "target": "https://1.1.1.1"}, user)["operation_id"]
+        self.run_next()
+        self.assertEqual("succeeded", self.service.operation(following, user)["status"])
+        self.immediate(task)
+        self.run_next()
+        self.assertEqual("completed", self.service.operation(task, user)["phase"])
+
+    def test_retirement_defers_while_route_change_is_claimed(self):
+        route, _, user = self.add_route()
+        task = self.service.enqueue("update", {"id": route["id"], "node_id": 2}, user)["operation_id"]
+        self.run_next()
+        self.service.enqueue("update", {"id": route["id"], "node_id": 1}, user)
+        pending = self.service.claim()
+        self.immediate(task)
+        self.run_next()
+        self.assertIn((1, route["subdomain"]), self.remote.maps)
+        self.assertEqual("cleanup", self.service.operation(task, user)["phase"])
+        self.service.execute(pending)
+        self.immediate(task)
+        self.run_next()
+        self.assertIn((1, route["subdomain"]), self.remote.maps)
+
+    def test_active_tasks_are_not_hidden_by_hundred_newer_records(self):
+        route, _, user = self.add_route()
+        task = self.service.enqueue("update", {"id": route["id"]}, self.admin)["operation_id"]
+        with self.db.connect(write=True) as db:
+            for i in range(105):
+                db.execute("INSERT INTO operations(id,username,owner_username,action,resource,payload,status,phase,created_at,updated_at) VALUES(?,?,?,'update',?,'{}','succeeded','completed',?,?)",
+                           (str(i), "admin", user["username"], "historical-" + str(i), time.time() + i, time.time()))
+        self.assertEqual(task, self.service.data(user)["operations"][0]["id"])
+
+    def test_retirement_ttl_uses_actual_value_and_auto_fallback(self):
+        self.assertEqual(180, self.service.retirement_delay([{"ttl": 120}]))
+        self.assertEqual(360, self.service.retirement_delay([{"ttl": 1}]))
+        self.assertEqual(3660, self.service.retirement_delay([{"ttl": 3600}]))
+        self.assertEqual(360, self.service.retirement_delay([]))
+
+    def test_legacy_pending_cleanup_unlocks_without_losing_deadline_or_owner(self):
+        route, previous, user = self.add_route()
+        task = self.service.enqueue("update", {"id": route["id"], "node_id": 2}, self.admin)["operation_id"]
+        self.run_next()
+        with self.db.connect(write=True) as db:
+            deadline = db.execute("SELECT next_run FROM operations WHERE id=?", (task,)).fetchone()[0]
+            db.execute("UPDATE operations SET status='pending' WHERE id=?", (task,))
+            db.execute("UPDATE operations SET phase='cleanup' WHERE id=?", (previous,))
+            db.execute("ALTER TABLE operations DROP COLUMN owner_username")
+        self.db.initialize()
+        self.assertEqual("succeeded", self.service.operation(task, user)["status"])
+        self.assertEqual(deadline, self.service.operation(task, user)["next_run"])
+        self.assertEqual("cleanup", self.service.operation(task, user)["phase"])
+        self.assertEqual("completed", self.service.operation(previous, user)["phase"])
+        self.assertEqual(user["username"], self.service.operation(task, user)["owner_username"])
+        self.assertIn((1, route["subdomain"]), self.remote.maps)
+
+    def test_retirement_network_write_is_serialized_with_following_update(self):
+        route, _, user = self.add_route()
+        task = self.service.enqueue("update", {"id": route["id"], "node_id": 2}, user)["operation_id"]
+        self.run_next()
+        self.immediate(task)
+        retiring = self.service.claim()
+        self.service.enqueue("update", {"id": route["id"], "node_id": 1, "target": "https://1.1.1.1"}, user)
+        following = self.service.claim()
+        worker = self.remote.worker
+        # Retirement sees the claimed foreground task and defers, then the update
+        # holds the resource lock so a later retirement cannot race its writes.
+        self.service.execute(retiring)
+        self.immediate(task)
+        retiring = self.service.claim()
+        started, proceed = threading.Event(), threading.Event()
+        def paused_update(node, action, sub, target):
+            if action == "add":
+                started.set()
+                proceed.wait(3)
+            return worker(node, action, sub, target)
+        self.remote.worker = paused_update
+        a = threading.Thread(target=self.service.execute, args=(following,))
+        b = threading.Thread(target=self.service.execute, args=(retiring,))
+        a.start()
+        self.assertTrue(started.wait(2))
+        b.start()
+        time.sleep(.05)
+        self.assertTrue(b.is_alive())
+        proceed.set()
+        a.join(3)
+        b.join(3)
+        self.assertFalse(a.is_alive() or b.is_alive())
+        self.assertEqual("https://1.1.1.1", self.remote.maps[(1, route["subdomain"])])
 
     def test_existing_unmanaged_dns_is_never_deleted_on_add_failure(self):
         user = self.register()

@@ -106,9 +106,11 @@ function App() {
     [name, setName] = useState('Emby Edge'),
     flight = useRef(null),
     sessionRef = useRef(session),
+    dataRef = useRef(data),
     abort = useRef(null),
     toastId = useRef(0);
   sessionRef.current = session;
+  dataRef.current = data;
   useEffect(() => {
     const controller = new AbortController();
     const legacy = initialSession();
@@ -224,7 +226,7 @@ function App() {
       if (sessionRef.current !== current) return;
       const controller = new AbortController();
       abort.current = controller;
-      setLoading(true);
+      if (force || !dataRef.current) setLoading(true);
       const promise = (async () => {
         try {
           const result = await request(current.role === 'admin' ? '/admin/data' : '/user/data', {
@@ -270,20 +272,34 @@ function App() {
       (session.role === 'admin' ? '/admin-panel' : '/panel') + location.hash,
     );
     refresh().catch((e) => notify(e.message, 'error'));
-    const timer = setInterval(() => {
-      if (
-        !document.hidden &&
-        !document.querySelector('dialog[open]') &&
-        !document.activeElement?.matches('input,textarea,select')
-      )
-        refresh().catch(() => {});
-    }, 5000);
+    let timer,
+      stopped = false;
+    const poll = async () => {
+      if (!document.hidden) await refresh().catch(() => {});
+      if (stopped) return;
+      const active = dataRef.current?.operations.some((o) =>
+        ['pending', 'running'].includes(o.status),
+      );
+      timer = setTimeout(poll, active ? 1000 : 3000);
+    };
+    timer = setTimeout(poll, 1000);
+    const resume = () => {
+      if (!document.hidden) refresh().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', resume);
+    addEventListener('focus', resume);
     return () => {
-      clearInterval(timer);
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', resume);
+      removeEventListener('focus', resume);
       abort.current?.abort();
       flight.current = null;
     };
   }, [session, refresh, notify]);
+  useEffect(() => {
+    if (session) refresh().catch(() => {});
+  }, [view, session, refresh]);
   const allowed = admin ? Object.keys(views) : ['routes', 'operations'];
   const selected = allowed.includes(view) ? view : 'routes';
   useEffect(() => {
@@ -517,7 +533,7 @@ function App() {
               )}
               <footer className="workspace-footer">
                 <span>
-                  Emby Edge <span className="footer-version">2.2.4</span>
+                  Emby Edge <span className="footer-version">2.2.5</span>
                 </span>
                 <span>
                   {updated
