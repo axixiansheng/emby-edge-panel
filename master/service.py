@@ -312,8 +312,8 @@ class Service:
                     payload["dns_before"] = records
                     self.save_payload(operation["id"], payload)
                 if node:
-                    target_url(payload["target"], resolve=True)
-                    self.remote.worker(node, "add", sub, payload["target"])
+                    target = target_url(payload["target"], resolve=True)
+                    self.remote.worker(node, "add", sub, target)
                     self.remote.dns(sub, node["host"])
                 else:
                     self.remote.dns(sub)

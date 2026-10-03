@@ -61,6 +61,15 @@ class BackupTests(unittest.TestCase):
         self.fixture.run_next()
         self.assertEqual(self.route["target"], self.fixture.remote.maps[(1, self.route["subdomain"])])
 
+    def test_legacy_origin_formats_round_trip_and_sync_canonical_url(self):
+        for target in ("1.1.1.1:443", "HTTPS://1.1.1.1/"):
+            with self.subTest(target=target):
+                backup = self.edited(lambda data: data["routes"][0].update(target=target))
+                self.restore(backup)
+                self.fixture.run_next()
+                self.assertEqual(target, self.backups.export()["data"]["routes"][0]["target"])
+                self.assertEqual("https://" + target.removeprefix("HTTPS://"), self.fixture.remote.maps[(1, self.route["subdomain"])])
+
     def test_checksum_domain_schema_hashes_and_associations_rejected_without_writes(self):
         original = self.backups.export()
         damaged = copy.deepcopy(original)

@@ -182,8 +182,7 @@ class Backups:
                     reject()
                 subs.add(route["subdomain"])
                 string(route["target"], 2048)
-                if target_url(route["target"]) != route["target"]:
-                    reject()
+                target_url(route["target"])
             for code in tables["auth_codes"]:
                 string(code["code"], 128)
                 number(code["duration"], 0, 100000)
