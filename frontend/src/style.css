@@ -578,7 +578,14 @@ button {
   position: absolute;
   inset: 0;
   max-width: 100%;
-  transition: opacity 0.4s var(--ease);
+  touch-action: pan-y;
+  cursor: grab;
+}
+.connection-scene.dragging canvas {
+  cursor: grabbing;
+}
+.connection-scene:not(.ready) canvas {
+  visibility: hidden;
 }
 .scene-overview {
   left: 46%;
@@ -588,14 +595,8 @@ button {
 .scene-fallback {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  object-position: left;
   position: absolute;
-  opacity: 0.4;
-  transition: opacity 0.35s var(--ease);
-}
-.connection-scene.ready .scene-fallback {
-  opacity: 0;
+  inset: 0;
 }
 .status {
   display: inline-flex;
@@ -1055,6 +1056,77 @@ tbody tr:hover {
 .code-value {
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+.code-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.code-ticket {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px 22px 16px;
+}
+.code-ticket-main {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 12px;
+}
+.code-ticket-icon {
+  color: var(--blue);
+  display: flex;
+}
+.code-ticket .code-value {
+  font-size: 18px;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.code-ticket-details {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  border-top: 1px dashed var(--line);
+  margin-top: 17px;
+  padding-top: 13px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.code-quota strong {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.code-owner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.code-ticket.redeemed .code-ticket-icon {
+  color: var(--muted);
+}
+@media (max-width: 900px) {
+  .code-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 480px) {
+  .code-ticket {
+    padding: 16px;
+  }
+  .code-ticket-main {
+    grid-template-columns: 24px minmax(0, 1fr) 32px;
+    gap: 8px;
+  }
+  .code-ticket .code-value {
+    font-size: 15px;
+  }
 }
 .task-list {
   border-top: 1px solid var(--line);
@@ -1638,11 +1710,13 @@ tbody tr:hover {
   height: 100%;
   object-fit: cover;
 }
-.auth-world .scene-fallback {
-  opacity: 0.28;
+.session-check {
+  min-height: 100dvh;
+  background: var(--page);
 }
-.auth-world .connection-scene.ready .scene-fallback {
-  opacity: 0;
+.auth-world .scene-fallback {
+  width: 60%;
+  padding: 8%;
 }
 :root[data-theme='dark'] .auth-world {
   background: #29292f;
@@ -2212,7 +2286,8 @@ tbody tr:hover {
     margin-top: 23px;
   }
   .auth-world .scene-fallback {
-    object-position: 30% top;
+    width: 100%;
+    padding: 0;
   }
   .auth-world .scene-auth canvas {
     pointer-events: auto;
@@ -2222,7 +2297,8 @@ tbody tr:hover {
   }
   .auth-world .connection-scene {
     bottom: auto;
-    height: 850px;
+    top: 40px;
+    height: 260px;
     pointer-events: none;
   }
   .auth-world .connection-scene canvas {

@@ -1,13 +1,14 @@
 {
   "name": "emby-edge-interface",
   "private": true,
-  "version": "2.2.0",
+  "version": "2.2.1",
   "type": "module",
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "test:ui": "playwright test"
+    "test:ui": "playwright test",
+    "test:scene": "node --test tests/scene.spec.js"
   },
   "dependencies": {
     "react": "^19.2.0",

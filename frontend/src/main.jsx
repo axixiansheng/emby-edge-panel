@@ -16,8 +16,6 @@ import {
   LogOut,
   Megaphone,
   Moon,
-  Pause,
-  Play,
   RefreshCw,
   Route,
   Server,
@@ -84,15 +82,15 @@ class ErrorBoundary extends Component {
 
 function App() {
   const reduce = useReducedMotion();
-  const [session, setSession] = useState(initialSession),
+  const [session, setSession] = useState(null),
+    [checkingSession, setCheckingSession] = useState(true),
     [data, setData] = useState(null),
     [loading, setLoading] = useState(false),
     [connected, setConnected] = useState(true),
     [updated, setUpdated] = useState(null);
   const [view, setView] = useState(() => location.hash.slice(1) || 'routes'),
     [toast, setToast] = useState(null),
-    [theme, setTheme] = useState(() => preference('emby_theme', 'light')),
-    [paused, setPaused] = useState(() => preference('emby_motion', 'on') === 'off');
+    [theme, setTheme] = useState(() => preference('emby_theme', 'light'));
   const [systemDark, setSystemDark] = useState(
       () => matchMedia('(prefers-color-scheme: dark)').matches,
     ),
@@ -102,6 +100,24 @@ function App() {
     abort = useRef(null),
     toastId = useRef(0);
   sessionRef.current = session;
+  useEffect(() => {
+    const controller = new AbortController();
+    const legacy = initialSession();
+    request('/session', { token: legacy?.token || '', signal: controller.signal })
+      .then((r) => r.json())
+      .then((s) => {
+        if (!controller.signal.aborted && ['admin', 'user'].includes(s.role)) {
+          setSession({ role: s.role, token: '' });
+          for (const key of ['emby_token', 'emby_role', 'token', 'role'])
+            sessionStorage.removeItem(key);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!controller.signal.aborted) setCheckingSession(false);
+      });
+    return () => controller.abort();
+  }, []);
   useEffect(() => {
     const controller = new AbortController();
     request('/public/config', { signal: controller.signal })
@@ -144,9 +160,6 @@ function App() {
     document.querySelector('meta[name="theme-color"]').content = dark ? '#1b1b20' : '#f2f2f0';
     remember('emby_theme', theme);
   }, [dark, theme]);
-  useEffect(() => {
-    remember('emby_motion', paused ? 'off' : 'on');
-  }, [paused]);
   const notify = useCallback(
     (text, kind = 'success') => setToast({ text, kind, id: ++toastId.current }),
     [],
@@ -166,13 +179,14 @@ function App() {
   }, []);
   const response = useCallback(
     async (path, body) => {
-      const token = sessionRef.current?.token || '';
+      const current = sessionRef.current;
+      const token = current?.token || '';
       try {
         const result = await request(path, { token, body });
-        if (token !== (sessionRef.current?.token || '')) throw new Error('登录状态已变化');
+        if (current !== sessionRef.current) throw new Error('登录状态已变化');
         return result;
       } catch (e) {
-        if (e.status === 401 && sessionRef.current?.token === token) clearSession();
+        if (e.status === 401 && sessionRef.current === current) clearSession();
         throw e;
       }
     },
@@ -187,7 +201,7 @@ function App() {
         if (!force) return flight.current;
         await flight.current.catch(() => {});
       }
-      if (sessionRef.current?.token !== current.token) return;
+      if (sessionRef.current !== current) return;
       const controller = new AbortController();
       abort.current = controller;
       setLoading(true);
@@ -199,7 +213,7 @@ function App() {
           });
           const next = await result.json();
           if (
-            sessionRef.current?.token !== current.token ||
+            sessionRef.current !== current ||
             controller.signal.aborted ||
             abort.current !== controller
           )
@@ -265,15 +279,15 @@ function App() {
   async function logout() {
     try {
       await api('/logout', {});
-    } catch {}
+    } catch (e) {
+      notify(e.message, 'error');
+      return;
+    }
     clearSession();
   }
   const context = { data, admin, api, response, refresh, notify };
   return (
-    <MotionConfig
-      reducedMotion={paused ? 'always' : 'user'}
-      transition={{ type: 'spring', stiffness: 350, damping: 34 }}
-    >
+    <MotionConfig reducedMotion="user" transition={{ type: 'spring', stiffness: 350, damping: 34 }}>
       <PanelContext.Provider value={context}>
         <a className="skip-link" href="#content">
           跳转到主要内容
@@ -283,6 +297,20 @@ function App() {
             className="brand"
             href={session ? (admin ? '/admin-panel' : '/panel') : '/'}
             aria-label={data?.panel_name || name}
+            onClick={(e) => {
+              if (
+                session &&
+                e.button === 0 &&
+                !e.ctrlKey &&
+                !e.metaKey &&
+                !e.shiftKey &&
+                !e.altKey
+              ) {
+                e.preventDefault();
+                navigate('routes');
+                window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
+              }
+            }}
           >
             <Waypoints size={25} strokeWidth={2.1} />
             <span>{data?.panel_name || name}</span>
@@ -293,12 +321,6 @@ function App() {
             </div>
           )}
           <div className="header-tools">
-            <IconButton
-              icon={paused ? Play : Pause}
-              label={paused ? '开启动效' : '暂停动效'}
-              aria-pressed={!paused}
-              onClick={() => setPaused((p) => !p)}
-            />
             {session && (
               <IconButton
                 icon={RefreshCw}
@@ -336,7 +358,9 @@ function App() {
             </details>
           </div>
         </header>
-        {session ? (
+        {checkingSession ? (
+          <main id="content" className="session-check" aria-busy="true" />
+        ) : session ? (
           <>
             <nav
               className="main-nav"
@@ -373,7 +397,7 @@ function App() {
                       e.currentTarget.scrollIntoView({
                         block: 'nearest',
                         inline: 'nearest',
-                        behavior: paused || reduce ? 'auto' : 'smooth',
+                        behavior: reduce ? 'auto' : 'smooth',
                       });
                     }}
                   >
@@ -443,9 +467,7 @@ function App() {
                       {connected ? '已连接主控' : '连接暂时中断'}
                     </span>
                   </div>
-                  {selected === 'routes' && (
-                    <Overview data={data} admin={admin} paused={paused} dark={dark} />
-                  )}
+                  {selected === 'routes' && <Overview data={data} admin={admin} dark={dark} />}
                   <motion.section
                     key={selected}
                     id={'view-' + selected}
@@ -475,7 +497,7 @@ function App() {
               )}
               <footer className="workspace-footer">
                 <span>
-                  Emby Edge <span className="footer-version">2.2</span>
+                  Emby Edge <span className="footer-version">2.2.1</span>
                 </span>
                 <span>
                   {updated
@@ -488,11 +510,10 @@ function App() {
         ) : (
           <Auth
             onLogin={(s) => {
-              setSession(s);
-              sessionStorage.setItem('emby_token', s.token);
-              sessionStorage.setItem('emby_role', s.role);
+              setSession({ role: s.role, token: '' });
+              for (const key of ['emby_token', 'emby_role', 'token', 'role'])
+                sessionStorage.removeItem(key);
             }}
-            paused={paused}
             dark={dark}
             name={name}
           />
@@ -502,7 +523,7 @@ function App() {
     </MotionConfig>
   );
 }
-function Overview({ data, admin, paused, dark }) {
+function Overview({ data, admin, dark }) {
   const nodes = data.nodes.filter((n) => n.online),
     active = data.operations.filter((o) => ['pending', 'running'].includes(o.status));
   const reserved = active.filter(
@@ -552,13 +573,12 @@ function Overview({ data, admin, paused, dark }) {
           mode="overview"
           nodeStates={data.nodes.map((n) => (n.online ? '1' : '0')).join(',')}
           dark={dark}
-          paused={paused}
         />
       </Suspense>
     </section>
   );
 }
-function Auth({ onLogin, paused, dark, name }) {
+function Auth({ onLogin, dark, name }) {
   const [register, setRegister] = useState(false),
     [visible, setVisible] = useState(false),
     [busy, setBusy] = useState(false),
@@ -572,10 +592,8 @@ function Auth({ onLogin, paused, dark, name }) {
   }, []);
   return (
     <main id="content" className="auth-world" tabIndex={-1}>
-      <Suspense
-        fallback={<img className="auth-scene-placeholder" src="/assets/edge-glass.webp" alt="" />}
-      >
-        <Scene paused={paused} dark={dark} />
+      <Suspense fallback={null}>
+        <Scene dark={dark} />
       </Suspense>
       <motion.section
         className="auth-content"

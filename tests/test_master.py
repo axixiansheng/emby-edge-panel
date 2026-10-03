@@ -61,6 +61,59 @@ class FakeRemote:
 
 
 class MasterTests(unittest.TestCase):
+    def test_cookie_session_persists_without_exposing_token(self):
+        with TestClient(create_app(self.config, self.remote, background=False)) as client:
+            self.assertEqual({"role": None}, client.get("/api/session").json())
+            login = client.post("/api/login", json={"username": "admin", "password": "admin-test", "code": ""})
+            cookie = login.headers["set-cookie"]
+            self.assertIn("HttpOnly", cookie)
+            self.assertIn("SameSite=lax", cookie)
+            self.assertIn("Max-Age=604800", cookie)
+            state = client.get("/api/session")
+            self.assertEqual("admin", state.json()["role"])
+            self.assertNotIn("token", state.json())
+            self.assertEqual(200, client.get("/api/admin/data").status_code)
+            self.assertEqual("no-store", state.headers["cache-control"])
+
+    def test_cookie_requires_origin_for_writes_and_logout_revokes_session(self):
+        with TestClient(create_app(self.config, self.remote, background=False)) as client:
+            token = client.post("/api/login", json={"username": "admin", "password": "admin-test"}).json()["token"]
+            self.assertEqual(403, client.post("/api/logout", json={}).status_code)
+            self.assertEqual(403, client.post("/api/logout", json={}, headers={"Origin": "http://testserver", "Sec-Fetch-Site": "cross-site"}).status_code)
+            self.assertEqual(403, client.post("/api/logout", json={}, headers={"Origin": "http://evil.example"}).status_code)
+            self.assertEqual(200, client.post("/api/logout", json={}, headers={"Origin": "http://testserver"}).status_code)
+            self.assertNotIn("emby_session", client.cookies)
+            self.assertEqual(401, client.get("/api/admin/data", headers={"Authorization": token}).status_code)
+
+    def test_secure_cookie_on_https_and_configured_public_host(self):
+        for origin in ("https://testserver", "http://panel.example.com"):
+            with TestClient(create_app(self.config, self.remote, background=False), base_url=origin) as client:
+                response = client.post("/api/login", json={"username": "admin", "password": "admin-test"})
+                self.assertIn("Secure", response.headers["set-cookie"])
+
+    def test_legacy_token_migrates_to_cookie_without_extending_session(self):
+        token = self.service.login({"username": "admin", "password": "admin-test"}, "local")["token"]
+        with self.db.connect(write=True) as db:
+            expiry = time.time() + 3600
+            db.execute("UPDATE sessions SET expire_time=? WHERE token=?", (expiry, token))
+        with TestClient(create_app(self.config, self.remote, background=False)) as client:
+            result = client.get("/api/session", headers={"Authorization": "Bearer " + token})
+            lifetime = int(result.headers["set-cookie"].split("Max-Age=", 1)[1].split(";", 1)[0])
+            self.assertGreater(lifetime, 3500)
+            self.assertLessEqual(lifetime, 3600)
+            self.assertEqual(expiry, result.json()["expires_at"])
+            self.assertEqual(200, client.get("/api/admin/data").status_code)
+
+    def test_expired_cookie_cleared_and_header_takes_precedence(self):
+        with TestClient(create_app(self.config, self.remote, background=False)) as client:
+            token = client.post("/api/login", json={"username": "admin", "password": "admin-test"}).json()["token"]
+            self.assertEqual(401, client.get("/api/admin/data", headers={"Authorization": "invalid"}).status_code)
+            self.assertIn("emby_session", client.cookies)
+            with self.db.connect(write=True) as db:
+                db.execute("UPDATE sessions SET expire_time=0 WHERE token=?", (token,))
+            self.assertEqual(401, client.get("/api/session").status_code)
+            self.assertNotIn("emby_session", client.cookies)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.config = Config(str(Path(self.temp.name) / "panel.db"), "admin-test",

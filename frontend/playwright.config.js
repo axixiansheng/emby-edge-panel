@@ -11,6 +11,7 @@ const python =
 const edge = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 export default defineConfig({
   testDir: './tests',
+  testIgnore: '**/scene.spec.js',
   workers: 1,
   timeout: 45000,
   reporter: 'list',

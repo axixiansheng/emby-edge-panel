@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -54,15 +55,20 @@ def create_app(config=None, integrations=None, background=True):
             path = path[4:]
         try:
             backup_request = path.startswith("/admin/backups/")
-            token = request.headers.get("authorization", "").removeprefix("Bearer ")
+            authorization = request.headers.get("authorization", "")
+            token = authorization.removeprefix("Bearer ") or request.cookies.get("emby_session", "")
             if backup_request:
                 session = await anyio.to_thread.run_sync(service.session, token)
                 if session["role"] != "admin":
                     raise BusinessError("Forbidden", 403)
             if request.method == "POST":
                 origin = request.headers.get("origin")
+                if request.headers.get("sec-fetch-site") == "cross-site":
+                    raise BusinessError("Origin rejected", 403)
                 if origin and urlsplit(origin).netloc != request.headers.get("host"):
                     raise BusinessError("Origin rejected", 403)
+                if token and not authorization and not origin and path not in {"/login", "/worker/bootstrap", "/queue/join"}:
+                    raise BusinessError("Origin required for cookie authentication", 403)
                 raw = bytearray()
                 async for chunk in request.stream():
                     raw.extend(chunk)
@@ -81,12 +87,14 @@ def create_app(config=None, integrations=None, background=True):
                 if path == "/healthz" and request.method == "GET":
                     with service.db.connect() as db:
                         db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
-                    return {"ok": True, "version": "2.2.0"}, 200
+                    return {"ok": True, "version": "2.2.1"}, 200
                 if path == "/login" and request.method == "POST":
                     ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
                     return service.login(data, ip), 200
                 if path == "/public/config" and request.method == "GET":
                     return {"panel_name": service.config.panel_name}, 200
+                if path == "/session" and request.method == "GET" and not token:
+                    return {"role": None}, 200
                 if path == "/worker/bootstrap" and request.method == "POST":
                     return service.bootstrap(data), 200
                 # Compatibility for browsers left open during upgrade.
@@ -94,11 +102,12 @@ def create_app(config=None, integrations=None, background=True):
                     return {"ticket": "compat", "position": 0}, 200
                 if path == "/queue/status" and request.method == "GET":
                     return {"position": 0, "ready": True}, 200
-                token = request.headers.get("authorization", "")
-                if token.startswith("Bearer "):
-                    token = token[7:]
                 session = service.session(token)
                 admin = session["role"] == "admin"
+                if path == "/session" and request.method == "GET":
+                    with service.db.connect() as db:
+                        expires = db.execute("SELECT expire_time FROM sessions WHERE token=?", (token,)).fetchone()[0]
+                    return {"role": session["role"], "expires_at": expires}, 200
                 if path == "/logout" and request.method == "POST":
                     with service.db.connect(write=True) as db:
                         db.execute("DELETE FROM sessions WHERE token=?", (token,))
@@ -151,7 +160,19 @@ def create_app(config=None, integrations=None, background=True):
             result, status = {"msg": "Internal error; check master logs"}, 500
         if isinstance(result, Response):
             return result
-        return JSONResponse(result, status, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+        response = JSONResponse(result, status, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+        secure = request.url.scheme == "https" or (
+            bool(service.config.panel_domain) and request.url.hostname == service.config.panel_domain
+        )
+        if status == 200 and path in {"/login", "/session"} and result.get("role"):
+            cookie_token = result.get("token", token)
+            lifetime = 604800 if path == "/login" else max(0, int(result["expires_at"] - time.time()))
+            response.set_cookie("emby_session", cookie_token, max_age=lifetime, httponly=True, secure=secure, samesite="lax")
+        elif (status == 200 and path == "/logout") or (
+            status == 401 and token == request.cookies.get("emby_session")
+        ):
+            response.delete_cookie("emby_session", httponly=True, secure=secure, samesite="lax")
+        return response
 
     async def frontend(request):
         name = request.path_params.get("file", "index.html")

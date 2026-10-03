@@ -55,9 +55,9 @@ export function Routes() {
     [remove, setRemove] = useState(null);
   const [layout, setLayout] = useState(() => {
     try {
-      return localStorage.getItem('emby_route_layout') || (admin ? 'table' : 'grid');
+      return localStorage.getItem('emby_route_layout_v2') || 'grid';
     } catch {
-      return admin ? 'table' : 'grid';
+      return 'grid';
     }
   });
   const rows = data.routes.filter(
@@ -72,7 +72,7 @@ export function Routes() {
   function chooseLayout(value) {
     setLayout(value);
     try {
-      localStorage.setItem('emby_route_layout', value);
+      localStorage.setItem('emby_route_layout_v2', value);
     } catch {}
   }
   function state(route) {
@@ -491,25 +491,31 @@ export function Codes() {
       {!codes.length ? (
         <Empty title="暂无匹配授权码" icon={Ticket} />
       ) : (
-        <Table headers={['授权码', '额度', '状态', '用户', '操作']}>
+        <div className="code-grid">
           {codes.map((c) => (
-            <tr key={c.code}>
-              <Cell>
+            <article className={'code-ticket' + (c.used ? ' redeemed' : '')} key={c.code}>
+              <div className="code-ticket-main">
+                <span className="code-ticket-icon">
+                  <Ticket size={22} aria-hidden="true" />
+                </span>
                 <span className="code-value" translate="no">
                   {c.code}
                 </span>
-              </Cell>
-              <Cell label="额度">{c.dur}</Cell>
-              <Cell label="状态">
-                <Status status={c.used ? 'used' : 'available'} />
-              </Cell>
-              <Cell label="用户">{c.user || '未绑定'}</Cell>
-              <Cell className="action-cell">
                 <CopyButton value={c.code} label="复制授权码" />
-              </Cell>
-            </tr>
+              </div>
+              <div className="code-ticket-details">
+                <span className="code-quota">
+                  <strong>{c.dur}</strong> 条线路
+                </span>
+                <Status status={c.used ? 'used' : 'available'} />
+                <span className="code-owner">
+                  <UserRound size={13} aria-hidden="true" />
+                  {c.user || '未绑定'}
+                </span>
+              </div>
+            </article>
           ))}
-        </Table>
+        </div>
       )}
       {adding && (
         <Dialog title="签发授权码" onClose={() => setAdding(false)}>

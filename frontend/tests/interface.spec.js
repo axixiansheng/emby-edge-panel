@@ -21,7 +21,7 @@ async function pixels(page) {
       let count = 0,
         hash = 0;
       for (let i = 0; i < b.length; i += 4) {
-        if (b[i + 3]) count++;
+        if (Math.max(b[i], b[i + 1], b[i + 2]) - Math.min(b[i], b[i + 1], b[i + 2]) > 20) count++;
         hash = (Math.imul(hash, 31) + b[i] + b[i + 1] + b[i + 2] + b[i + 3]) >>> 0;
       }
       return { count, hash };
@@ -174,24 +174,93 @@ test('no WebGL still provides usable authentication and routes', async ({ browse
   await context.close();
 });
 
-test('Three.js renders, responds, animates and stops when paused', async ({ page }) => {
+test('Three.js rotates clockwise, supports horizontal dragging and has no pause control', async ({
+  page,
+}) => {
   await page.goto('/');
   await page.waitForSelector('.connection-scene.ready canvas');
   const start = await pixels(page);
+  const angle = Number(await page.locator('.connection-scene').getAttribute('data-rotation'));
   expect(start.count).toBeGreaterThan(3000);
   await page.waitForTimeout(450);
   expect((await pixels(page)).hash).not.toBe(start.hash);
-  await page.getByRole('button', { name: '暂停动效' }).click();
-  await page.waitForTimeout(300);
-  const paused = await pixels(page);
-  await page.waitForTimeout(350);
-  expect((await pixels(page)).hash).toBe(paused.hash);
-  await page.mouse.move(300, 200);
-  expect((await pixels(page)).hash).not.toBe(paused.hash);
+  expect(
+    Number(await page.locator('.connection-scene').getAttribute('data-rotation')),
+  ).toBeLessThan(angle);
+  await expect(page.getByRole('button', { name: '暂停动效' })).toHaveCount(0);
+  await page.mouse.move(300, 350);
+  await page.mouse.down();
+  await page.mouse.move(450, 350, { steps: 10 });
+  await page.mouse.up();
+  expect(
+    Number(await page.locator('.connection-scene').getAttribute('data-rotation')),
+  ).toBeGreaterThan(angle + 1);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(100);
   expect((await pixels(page)).count).toBeGreaterThan(1000);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('cookie persists across a fresh tab and brand returns to default route cards', async ({
+  page,
+  context,
+}) => {
+  await page.addInitScript(() => localStorage.setItem('emby_route_layout', 'table'));
+  await login(page, true);
+  await expect(page.locator('.route-tile')).toHaveCount(2);
+  await page.getByRole('tab', { name: '授权码', exact: true }).click();
+  await page.locator('.brand').click();
+  await expect(page.getByRole('tab', { name: '线路', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  const cookie = (await context.cookies()).find((c) => c.name === 'emby_session');
+  expect(cookie.httpOnly).toBe(true);
+  expect(cookie.expires).toBeGreaterThan(Date.now() / 1000 + 86400);
+  expect(await page.evaluate(() => sessionStorage.getItem('emby_token'))).toBe(null);
+  const other = await context.newPage();
+  await other.goto('/');
+  await expect(other.getByRole('heading', { name: '线路管理', exact: true })).toBeVisible();
+  await other.locator('.profile-menu summary').click();
+  await other.getByRole('button', { name: '退出登录' }).click();
+  await other.reload();
+  await expect(other.getByRole('button', { name: '进入我的空间' })).toBeVisible();
+  await other.close();
+});
+
+test('mobile touch drag rotates the high-density scene without the old background', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    deviceScaleFactor: 2,
+  });
+  const page = await context.newPage();
+  const obsolete = [];
+  page.on('request', (r) => {
+    if (r.url().includes('edge-glass.webp')) obsolete.push(r.url());
+  });
+  await page.goto('/');
+  await page.waitForSelector('.connection-scene.ready');
+  const before = Number(await page.locator('.connection-scene').getAttribute('data-rotation'));
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ x: 80, y: 170 }],
+  });
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchMove',
+    touchPoints: [{ x: 245, y: 170 }],
+  });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  expect(
+    Number(await page.locator('.connection-scene').getAttribute('data-rotation')),
+  ).toBeGreaterThan(before + 1);
+  expect(await page.locator('canvas').evaluate((c) => c.width)).toBe(780);
+  expect(obsolete).toEqual([]);
+  await expect(page.locator('.auth-scene-placeholder')).toHaveCount(0);
+  await context.close();
 });
 
 test('reduced motion, dark mode and logout remain usable', async ({ page }) => {
@@ -206,4 +275,17 @@ test('reduced motion, dark mode and logout remain usable', async ({ page }) => {
   const first = await pixels(page);
   await page.waitForTimeout(300);
   expect((await pixels(page)).hash).toBe(first.hash);
+});
+
+test('lost graphics context stops the loop and retains usable static scene', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForSelector('.connection-scene.ready canvas');
+  await page
+    .locator('canvas')
+    .evaluate((c) => c.dispatchEvent(new Event('webglcontextlost', { cancelable: true })));
+  await expect(page.locator('.scene-fallback')).toBeVisible();
+  const angle = await page.locator('.connection-scene').getAttribute('data-rotation');
+  await page.waitForTimeout(400);
+  await expect(page.locator('.connection-scene')).toHaveAttribute('data-rotation', angle);
+  await expect(page.getByRole('button', { name: '进入我的空间' })).toBeEnabled();
 });
